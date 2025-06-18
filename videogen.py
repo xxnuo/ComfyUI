@@ -4,7 +4,7 @@
 #     uvicorn.run("webui.server:app", host="0.0.0.0", port=3000)
 
 import torch
-from Engine.webui.engine import WanVideo
+from webui.engine import WanVideo
 
 if __name__ == "__main__":
     with torch.no_grad():
