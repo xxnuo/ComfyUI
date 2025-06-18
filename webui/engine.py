@@ -3,12 +3,8 @@ import datetime
 import torch
 import imageio
 import numpy as np
-# import sys
 
-# # 在 Python 路径中添加 ComfyUI 目录，放在 path 最前面
-# sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),"ComfyUI"))
-
-from ComfyUI.custom_nodes.WanVideoWrapper.nodes import (
+from custom_nodes.WanVideoWrapper.nodes import (
     WanVideoBlockSwap,
     WanVideoLoraSelect,
     WanVideoModelLoader,
