@@ -129,7 +129,7 @@ class WanVideo:
             self.wanvideo = wanvideo.loadmodel(
                 transformer_name,
                 base_precision="fp16",
-                load_device="cpu",
+                load_device="cuda",
                 quantization="disabled",
                 block_swap_args=block_swap,
                 lora=lora_select,
