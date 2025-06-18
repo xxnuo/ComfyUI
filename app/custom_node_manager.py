@@ -8,6 +8,8 @@ import json
 import logging
 from functools import lru_cache
 
+import sys
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from utils.json_util import merge_json_recursive
 
 
