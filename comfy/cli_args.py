@@ -52,7 +52,7 @@ parser.add_argument("--disable-auto-launch", action="store_true", help="Disable 
 parser.add_argument("--cuda-device", type=int, default=None, metavar="DEVICE_ID", help="Set the id of the cuda device this instance will use.")
 cm_group = parser.add_mutually_exclusive_group()
 cm_group.add_argument("--cuda-malloc", action="store_true", help="Enable cudaMallocAsync (enabled by default for torch 2.0 and up).")
-cm_group.add_argument("--disable-cuda-malloc", action="store_true", help="Disable cudaMallocAsync.")
+cm_group.add_argument("--disable-cuda-malloc", default=True, action="store_true", help="Disable cudaMallocAsync.")
 
 
 fp_group = parser.add_mutually_exclusive_group()
@@ -120,7 +120,7 @@ upcast.add_argument("--dont-upcast-attention", action="store_true", help="Disabl
 
 
 vram_group = parser.add_mutually_exclusive_group()
-vram_group.add_argument("--gpu-only", action="store_true", help="Store and run everything (text encoders/CLIP models, etc... on the GPU).")
+vram_group.add_argument("--gpu-only", default=True, action="store_true", help="Store and run everything (text encoders/CLIP models, etc... on the GPU).")
 vram_group.add_argument("--highvram", action="store_true", help="By default models will be unloaded to CPU memory after being used. This option keeps them in GPU memory.")
 vram_group.add_argument("--normalvram", action="store_true", help="Used to force normal vram use if lowvram gets automatically enabled.")
 vram_group.add_argument("--lowvram", action="store_true", help="Split the unet in parts to use less vram.")
