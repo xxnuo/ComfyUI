@@ -18,8 +18,8 @@ from custom_nodes.WanVideoWrapper.nodes import (
 )
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
-FPS = 24
 VIDEO_LENGTH = 4  # seconds
+FPS = 16
 
 
 def save_video(frames: torch.Tensor, seed: int, output_folder: str = "./output") -> str:
