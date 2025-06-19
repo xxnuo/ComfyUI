@@ -18,7 +18,7 @@ from custom_nodes.WanVideoWrapper.nodes import (
 )
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
-VIDEO_LENGTH = 4  # seconds
+VIDEO_LENGTH = 8  # seconds
 FPS = 16
 
 
