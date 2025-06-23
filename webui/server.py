@@ -215,6 +215,21 @@ def load_model():  # small_model: bool = False):  # config: ModelConfig = None):
             if not torch.cuda.is_available():
                 raise ValueError("CUDA is not available, cannot load model")
 
+            # 检查剩余显存量，要求至少有51GB剩余显存
+            free_memory_gb = torch.cuda.get_device_properties(0).total_memory / (
+                1024**3
+            ) - torch.cuda.memory_allocated(0) / (1024**3)
+            required_memory_gb = 51.0
+
+            logger.info(
+                f"Required memory: {required_memory_gb}GB, Available memory: {free_memory_gb:.2f}GB"
+            )
+
+            if free_memory_gb < required_memory_gb:
+                raise ValueError(
+                    f"Memory insufficient! Need at least {required_memory_gb}GB memory, but only {free_memory_gb:.2f}GB available"
+                )
+
             # if small_model:
             #     model_instance = WanVideo(
             #         lora_name="Wan21_CausVid_bidirect2_T2V_1_3B_lora_rank32.safetensors",
