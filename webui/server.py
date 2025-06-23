@@ -65,7 +65,6 @@ class VideoRequest(BaseModel):
     seconds: Optional[float] = 4.0  # 默认4秒视频
     width: Optional[int] = 832
     height: Optional[int] = 480
-    # 其他参数使用默认值，不需要用户提供
 
 
 # class ModelConfig(BaseModel):
@@ -193,7 +192,7 @@ def get_model_status():
 
 
 @app.post("/model/load")
-def load_model():  # config: ModelConfig = None):
+def load_model():  # small_model: bool = False):  # config: ModelConfig = None):
     """加载模型"""
     global model_instance, model_status, model_error
 
@@ -216,6 +215,14 @@ def load_model():  # config: ModelConfig = None):
             if not torch.cuda.is_available():
                 raise ValueError("CUDA is not available, cannot load model")
 
+            # if small_model:
+            #     model_instance = WanVideo(
+            #         lora_name="Wan21_CausVid_bidirect2_T2V_1_3B_lora_rank32.safetensors",
+            #         transformer_name="Wan2_1-T2V-1_3B_fp8_e4m3fn.safetensors",
+            #         t5_model_name="umt5-xxl-enc-fp8_e4m3fn.safetensors",
+            #         vae_name="Wan2_1_VAE_bf16.safetensors",
+            #     )
+            # else:
             model_instance = WanVideo(
                 # lora_name=config.lora_name,
                 # transformer_name=config.transformer_name,
