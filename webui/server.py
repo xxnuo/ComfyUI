@@ -353,12 +353,8 @@ def get_task_result(task_id: str):
 
 @app.get("/tasks")
 def list_tasks(
-    limit: int = Query(10, ge=1, le=100),
-    skip: int = Query(0, ge=0),
     status: Optional[str] = None,
 ):
-    """列出所有任务，支持分页和状态过滤"""
-    # 根据状态过滤
     if status:
         try:
             task_status = TaskStatus(status)
@@ -371,9 +367,6 @@ def list_tasks(
     # 按创建时间倒序排序
     filtered_tasks.sort(key=lambda x: x.created_at, reverse=True)
 
-    # 分页
-    paginated_tasks = filtered_tasks[skip : skip + limit]
-
     return {
         "total": len(filtered_tasks),
         "tasks": [
@@ -385,7 +378,7 @@ def list_tasks(
                 "completed_at": t.completed_at,
                 "error": t.error if t.status == TaskStatus.FAILED else None,
             }
-            for t in paginated_tasks
+            for t in filtered_tasks
         ],
     }
 
@@ -450,66 +443,9 @@ def delete_task_video(task_id: str):
         raise HTTPException(status_code=500, detail=f"Failed to delete video: {str(e)}")
 
 
-@app.delete("/videos/cleanup")
-def cleanup_videos():
-    """清理所有视频文件"""
-    deleted_count = 0
-    errors = []
-
-    # 遍历所有任务，清理对应的视频
-    for task_id, task in tasks.items():
-        if (
-            task.status == TaskStatus.COMPLETED
-            and task.result
-            and "path" in task.result
-        ):
-            video_path = task.result["path"]
-            try:
-                if os.path.exists(video_path):
-                    os.remove(video_path)
-                    # 从结果中移除数据
-                    if "data" in task.result:
-                        del task.result["data"]
-                    deleted_count += 1
-                    logger.info(f"Deleted video for task {task_id}")
-            except Exception as e:
-                error_msg = f"Error deleting video for task {task_id}: {str(e)}"
-                logger.error(error_msg)
-                errors.append(error_msg)
-
-    # 清理生成目录中的所有视频文件
-    try:
-        for filename in os.listdir(VIDEO_STORAGE_DIR):
-            if filename.endswith(".mp4"):
-                file_path = os.path.join(VIDEO_STORAGE_DIR, filename)
-                try:
-                    os.remove(file_path)
-                    deleted_count += 1
-                    logger.info(f"Deleted orphaned video file: {filename}")
-                except Exception as e:
-                    error_msg = f"Error deleting file {filename}: {str(e)}"
-                    logger.error(error_msg)
-                    errors.append(error_msg)
-    except Exception as e:
-        error_msg = f"Error accessing video directory: {str(e)}"
-        logger.error(error_msg)
-        errors.append(error_msg)
-
-    return {
-        "status": "success" if not errors else "partial",
-        "deleted_count": deleted_count,
-        "errors": errors if errors else None,
-    }
-
-
 @app.delete("/tasks/cleanup")
-def cleanup_tasks(keep_all_completed: bool = False, max_keep_completed: int = 50):
-    """清理任务列表
-
-    参数:
-        keep_all_completed: 设置为 True 时清理所有已完成任务，False 时保留部分已完成任务
-        max_keep_completed: 当 keep_all_completed 为 False 时，保留的已完成任务数量
-    """
+def cleanup_tasks(keep_uncompleted: bool = True, keep_completed: bool = False):
+    """清理任务列表"""
     global tasks
 
     # 按创建时间排序所有任务
@@ -518,17 +454,17 @@ def cleanup_tasks(keep_all_completed: bool = False, max_keep_completed: int = 50
 
     # 根据参数决定是否保留所有已完成任务
     tasks_to_keep = {}
-    completed_count = 0
     deleted_count = 0
 
     for task in all_tasks:
         # 未完成任务全部保留
-        if task.status in [TaskStatus.PENDING, TaskStatus.PROCESSING]:
+        if keep_uncompleted and task.status in [
+            TaskStatus.PENDING,
+            TaskStatus.PROCESSING,
+        ]:
             tasks_to_keep[task.id] = task
-        # 如果需要保留部分已完成任务
-        elif not keep_all_completed and completed_count < max_keep_completed:
+        elif keep_completed and task.status == TaskStatus.COMPLETED:
             tasks_to_keep[task.id] = task
-            completed_count += 1
         # 其他任务需要删除
         else:
             # 如果有视频，删除视频
