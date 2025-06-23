@@ -33,6 +33,8 @@ model_status = "unloaded"  # unloaded, loading, loaded, error
 model_error = None
 model_lock = threading.Lock()  # 添加模型操作锁
 
+VIDEO_STORAGE_DIR = "./output"
+
 app = FastAPI(
     title="Video Generation API",
     description="API for video generation",
@@ -45,7 +47,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 
 
 # 任务结果存储
@@ -77,6 +78,8 @@ class Task(BaseModel):
     status: TaskStatus
     prompt: str
     seconds: float
+    width: int
+    height: int
     created_at: str
     completed_at: Optional[str] = None
     result: Optional[Dict[str, Any]] = None
@@ -110,7 +113,7 @@ def process_task(task_id: str) -> Task:
 
             # 计算帧数 (duration * fps + 1)
             fps = 16
-            num_frames = int(task.duration_seconds * fps) + 1
+            num_frames = int(task.seconds * fps) + 1
 
             seed = torch.randint(0, 1000000000, (1,)).item()
 
@@ -125,6 +128,7 @@ def process_task(task_id: str) -> Task:
         video_data = encode_data(save_path)
         task.result = {
             "filename": os.path.basename(save_path),
+            "path": save_path,
             "data": video_data,
             "seed": seed,
         }
@@ -314,6 +318,83 @@ def list_tasks(limit: int = 10, skip: int = 0):
             }
             for t in task_list[skip : skip + limit]
         ],
+    }
+
+
+@app.delete("/tasks/{task_id}/video")
+def delete_task_video(task_id: str):
+    """删除特定任务的视频文件"""
+    if task_id not in tasks:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    task = tasks[task_id]
+
+    if (
+        task.status != TaskStatus.COMPLETED
+        or not task.result
+        or "path" not in task.result
+    ):
+        return {"status": "skipped", "message": "No video file available for this task"}
+
+    video_path = task.result["path"]
+
+    try:
+        if os.path.exists(video_path):
+            os.remove(video_path)
+            # 从结果中移除数据
+            if "data" in task.result:
+                del task.result["data"]
+            return {
+                "status": "success",
+                "message": f"Video for task {task_id} deleted successfully",
+            }
+        else:
+            return {"status": "skipped", "message": "Video file not found"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete video: {str(e)}")
+
+
+@app.delete("/videos/cleanup")
+def cleanup_videos():
+    """清理所有视频文件"""
+    deleted_count = 0
+    errors = []
+
+    # 遍历所有任务，清理对应的视频
+    for task_id, task in tasks.items():
+        if (
+            task.status == TaskStatus.COMPLETED
+            and task.result
+            and "path" in task.result
+        ):
+            video_path = task.result["path"]
+            try:
+                if os.path.exists(video_path):
+                    os.remove(video_path)
+                    # 从结果中移除数据
+                    if "data" in task.result:
+                        del task.result["data"]
+                    deleted_count += 1
+            except Exception as e:
+                errors.append(f"Error deleting video for task {task_id}: {str(e)}")
+
+    # 清理生成目录中的所有视频文件
+    try:
+        for filename in os.listdir(VIDEO_STORAGE_DIR):
+            if filename.endswith(".mp4"):
+                file_path = os.path.join(VIDEO_STORAGE_DIR, filename)
+                try:
+                    os.remove(file_path)
+                    deleted_count += 1
+                except Exception as e:
+                    errors.append(f"Error deleting file {filename}: {str(e)}")
+    except Exception as e:
+        errors.append(f"Error accessing video directory: {str(e)}")
+
+    return {
+        "status": "success" if not errors else "partial",
+        "deleted_count": deleted_count,
+        "errors": errors if errors else None,
     }
 
 
