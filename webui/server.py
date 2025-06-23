@@ -1,27 +1,41 @@
-import os
-
-# set CUDA_MODULE_LOADING=LAZY to speed up the serverless function
-os.environ["CUDA_MODULE_LOADING"] = "LAZY"
-# set SAFETENSORS_FAST_GPU=1 to speed up the serverless function
-os.environ["SAFETENSORS_FAST_GPU"] = "1"
-import uuid
-import time
 import base64
-from datetime import datetime
-from typing import Dict, List, Optional, Any, Union
-from enum import Enum
-from pydantic import BaseModel, Field
-from fastapi import FastAPI, HTTPException, BackgroundTasks, status
-from fastapi.middleware.cors import CORSMiddleware
+import logging
+import os
 import threading
-import uvicorn
-import torch
+import uuid
+from datetime import datetime
+from enum import Enum
+from typing import Any, Dict, Optional
 
-from webui.engine import WanVideo, check_data_format
+import torch
+import uvicorn
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+
+from webui.engine import WanVideo
+
+# 配置日志
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[logging.StreamHandler()],
+)
+logger = logging.getLogger()
+
+# 设置环境变量
+os.environ["CUDA_MODULE_LOADING"] = "LAZY"  # 延迟加载 CUDA 模块
+os.environ["SAFETENSORS_FAST_GPU"] = "1"  # 直接加载 Safetensors 到 GPU
+
+# 模型管理
+model_instance = None
+model_status = "unloaded"  # unloaded, loading, loaded, error
+model_error = None
+model_lock = threading.Lock()  # 添加模型操作锁
 
 app = FastAPI(
     title="Video Generation API",
-    description="API for video generation from text prompts",
+    description="API for video generation",
 )
 
 app.add_middleware(
@@ -32,11 +46,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 模型管理
-model_instance = None
-model_status = "unloaded"  # unloaded, loading, loaded, error
-model_error = None
-model_lock = threading.Lock()  # 添加模型操作锁
 
 
 # 任务结果存储
@@ -49,32 +58,26 @@ class TaskStatus(str, Enum):
 
 class VideoRequest(BaseModel):
     prompt: str
-    steps: Optional[int] = 6
-    num_frames: Optional[int] = 65  # 4秒 * 16fps + 1
+    seconds: Optional[float] = 4.0  # 默认4秒视频
     width: Optional[int] = 832
     height: Optional[int] = 480
-    n_prompt: Optional[str] = (
-        "Bright tones, overexposed, static, blurred details, subtitles, static, cg, cartoon,overall gray, worst quality, low quality, JPEG compression residue, ugly, incomplete, extra fingers, poorly drawn hands, poorly drawn faces, deformed, disfigured, misshapen limbs, fused fingers, still picture, messy background, three legs, many people in the background, walking backwards."
-    )
-    cfg: Optional[float] = 1.0
-    shift: Optional[float] = 4.0
-    seed: Optional[int] = None
+    # 其他参数使用默认值，不需要用户提供
 
 
 class ModelConfig(BaseModel):
-    lora_name: Optional[str] = "Wan21_CausVid_14B_T2V_lora_rank32.safetensors"
-    transformer_name: Optional[str] = "Wan2_1-T2V-14B_fp8_e5m2.safetensors"
-    t5_model_name: Optional[str] = "umt5-xxl-enc-bf16.safetensors"
-    vae_name: Optional[str] = "Wan2_1_VAE_bf16.safetensors"
-    strength: Optional[float] = 0.5
+    lora_name: Optional[str]
+    transformer_name: Optional[str]
+    t5_model_name: Optional[str]
+    vae_name: Optional[str]
+    strength: Optional[float]
 
 
 class Task(BaseModel):
     id: str
     status: TaskStatus
-    request: VideoRequest
+    prompt: str
+    seconds: float
     created_at: str
-    started_at: Optional[str] = None
     completed_at: Optional[str] = None
     result: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
@@ -99,37 +102,31 @@ def process_task(task_id: str) -> Task:
 
     try:
         task.status = TaskStatus.PROCESSING
-        task.started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         tasks[task_id] = task
 
         with model_lock:
             if model_instance is None:
                 raise ValueError("Model is not loaded. Please load the model first.")
 
-            job_input = task.request.model_dump()
-            job_input = check_data_format(job_input)
+            # 计算帧数 (duration * fps + 1)
+            fps = 16
+            num_frames = int(task.duration_seconds * fps) + 1
 
-            # 如果没有指定seed，生成一个随机种子
-            if job_input["seed"] is None:
-                job_input["seed"] = torch.randint(0, 1000000000, (1,)).item()
+            seed = torch.randint(0, 1000000000, (1,)).item()
 
             save_path = model_instance.inference(
-                prompt=job_input["prompt"],
-                steps=job_input["steps"],
-                num_frames=job_input["num_frames"],
-                width=job_input["width"],
-                height=job_input["height"],
-                n_prompt=job_input["n_prompt"],
-                cfg=job_input["cfg"],
-                shift=job_input["shift"],
-                seed=job_input["seed"],
+                prompt=task.prompt,
+                num_frames=num_frames,
+                width=task.width,
+                height=task.height,
+                seed=seed,
             )
 
         video_data = encode_data(save_path)
         task.result = {
             "filename": os.path.basename(save_path),
             "data": video_data,
-            "seed": job_input["seed"],
+            "seed": seed,
         }
         task.status = TaskStatus.COMPLETED
         task.completed_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -196,7 +193,9 @@ def load_model(config: ModelConfig = None):
         except Exception as e:
             model_status = "error"
             model_error = str(e)
-            raise HTTPException(status_code=500, detail=f"Failed to load model: {str(e)}")
+            raise HTTPException(
+                status_code=500, detail=f"Failed to load model: {str(e)}"
+            )
 
 
 @app.post("/model/unload")
@@ -219,7 +218,9 @@ def unload_model():
             return {"status": "success", "message": "Model unloaded successfully"}
         except Exception as e:
             model_error = str(e)
-            raise HTTPException(status_code=500, detail=f"Failed to unload model: {str(e)}")
+            raise HTTPException(
+                status_code=500, detail=f"Failed to unload model: {str(e)}"
+            )
 
 
 @app.post("/tasks")
@@ -228,11 +229,14 @@ def create_task(request: VideoRequest):
     # 生成任务ID
     task_id = str(uuid.uuid4())
 
-    # 创建任务
+    # 创建简化的任务
     task = Task(
         id=task_id,
         status=TaskStatus.PENDING,
-        request=request,
+        prompt=request.prompt,
+        seconds=request.seconds,
+        width=request.width,
+        height=request.height,
         created_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     )
 
@@ -244,10 +248,14 @@ def create_task(request: VideoRequest):
 
     # 如果任务已完成，只返回必要信息，不返回大型base64数据
     response_task = task.model_dump()
-    if task.status == TaskStatus.COMPLETED and task.result and "data" in response_task["result"]:
+    if (
+        task.status == TaskStatus.COMPLETED
+        and task.result
+        and "data" in response_task["result"]
+    ):
         response_task["result"]["data_available"] = True
         del response_task["result"]["data"]
-    
+
     return response_task
 
 
@@ -300,6 +308,7 @@ def list_tasks(limit: int = 10, skip: int = 0):
             {
                 "id": t.id,
                 "status": t.status,
+                "prompt": t.prompt,
                 "created_at": t.created_at,
                 "completed_at": t.completed_at,
             }
