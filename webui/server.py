@@ -184,7 +184,7 @@ async def task_processor_func():
 
 
 @app.get("/health")
-async def health_check():
+def health_check():
     """健康检查接口"""
     return {
         "status": "ok",
