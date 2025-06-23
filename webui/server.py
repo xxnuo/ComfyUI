@@ -216,13 +216,31 @@ def load_model():  # small_model: bool = False):  # config: ModelConfig = None):
                 raise ValueError("CUDA is not available, cannot load model")
 
             # 检查剩余显存量，要求至少有51GB剩余显存
-            free_memory_gb = torch.cuda.get_device_properties(0).total_memory / (
-                1024**3
-            ) - torch.cuda.memory_allocated(0) / (1024**3)
+            # 获取更准确的可用显存信息
+            torch.cuda.empty_cache()  # 清理缓存以获得更准确的数据
+
+            # 尝试分配并立即释放一些内存，以确保PyTorch能够准确报告可用内存
+            try:
+                # 分配1MB的临时内存来强制更新内存计数器
+                tmp = torch.ones((1024 * 1024 // 4,), dtype=torch.float, device="cuda")
+                del tmp
+            except RuntimeError:
+                pass  # 忽略无法分配内存的错误
+
+            # 获取实际可用显存 = 总内存 - 已分配内存 - 缓存内存
+            total_memory = torch.cuda.get_device_properties(0).total_memory
+            allocated_memory = torch.cuda.memory_allocated(0)
+            reserved_memory = torch.cuda.memory_reserved(0)
+            free_memory = total_memory - allocated_memory - reserved_memory
+
+            free_memory_gb = free_memory / (1024**3)
             required_memory_gb = 51.0
 
             logger.info(
                 f"Required memory: {required_memory_gb}GB, Available memory: {free_memory_gb:.2f}GB"
+            )
+            logger.info(
+                f"Total GPU memory: {total_memory / (1024**3):.2f}GB, Allocated: {allocated_memory / (1024**3):.2f}GB, Reserved: {reserved_memory / (1024**3):.2f}GB"
             )
 
             if free_memory_gb < required_memory_gb:
