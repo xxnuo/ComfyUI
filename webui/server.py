@@ -13,6 +13,8 @@ from fastapi import FastAPI, HTTPException, BackgroundTasks, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import psutil
+from fastapi.responses import FileResponse
+from pathlib import Path
 
 from webui.engine import WanVideo
 
@@ -517,6 +519,13 @@ def cleanup_tasks(keep_uncompleted: bool = True, keep_completed: bool = False):
         "remaining_count": len(tasks_to_keep),
     }
 
+
+@app.get("/output/{filename}", description="获取生成的视频")
+def get_video(filename: str):
+    file_path = Path(VIDEO_STORAGE_DIR) / filename
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="视频不存在")
+    return FileResponse(file_path)
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=3000)
