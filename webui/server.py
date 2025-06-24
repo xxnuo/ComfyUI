@@ -216,15 +216,15 @@ def load_model():  # small_model: bool = False):  # config: ModelConfig = None):
             if not torch.cuda.is_available():
                 raise ValueError("CUDA is not available, cannot load model")
 
-            # 检查系统内存，要求至少有 50GB 可用
+            # 检查系统内存，要求至少有 51GB 可用
 
             # 获取系统可用内存
             available_memory = psutil.virtual_memory().available
-            swap_memory = psutil.swap_memory().free
-            total_available_memory = available_memory + swap_memory
+            # swap_memory = psutil.swap_memory().free
+            total_available_memory = available_memory # + swap_memory
             available_memory_gb = total_available_memory / (1024**3)
-            total_memory_gb = 64.0 + swap_memory / (1024**3)
-            required_memory_gb = 50.0
+            total_memory_gb = 64.0 # + swap_memory / (1024**3)
+            required_memory_gb = 51.0
 
             logger.info(
                 f"Required more memory: {required_memory_gb}GB, Available system memory: {available_memory_gb:.2f}GB/{total_memory_gb:.2f}GB"
