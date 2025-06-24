@@ -220,16 +220,19 @@ def load_model():  # small_model: bool = False):  # config: ModelConfig = None):
 
             # 获取系统可用内存
             available_memory = psutil.virtual_memory().available
-            available_memory_gb = available_memory / (1024**3)
+            swap_memory = psutil.swap_memory().free
+            total_available_memory = available_memory + swap_memory
+            available_memory_gb = total_available_memory / (1024**3)
+            total_memory_gb = 64.0 + swap_memory / (1024**3)
             required_memory_gb = 50.0
 
             logger.info(
-                f"Required more memory: {required_memory_gb}GB, Available system memory: {available_memory_gb:.2f}GB/64GB"
+                f"Required more memory: {required_memory_gb}GB, Available system memory: {available_memory_gb:.2f}GB/{total_memory_gb:.2f}GB"
             )
 
             if available_memory_gb < required_memory_gb:
                 raise ValueError(
-                    f"Text to video required memory: {required_memory_gb}GB, Available system memory: {available_memory_gb:.2f}GB/64GB, please shutdown other applications and try again."
+                    f"Text to video required memory: {required_memory_gb}GB, Available system memory: {available_memory_gb:.2f}GB/{total_memory_gb:.2f}GB, please shutdown other applications and try again."
                 )
 
             # if small_model:
