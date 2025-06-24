@@ -149,14 +149,14 @@ def process_task(task_id: str) -> Task:
                 raise inference_error
 
         # 编码视频数据
-        video_data = encode_data(save_path)
-        if not video_data:
-            raise ValueError("Failed to encode video data")
+        # video_data = encode_data(save_path)
+        # if not video_data:
+        #     raise ValueError("Failed to encode video data")
 
         task.result = {
             "filename": os.path.basename(save_path),
             "path": save_path,
-            "data": video_data,
+            # "data": video_data,
             "seed": seed,
         }
         task.status = TaskStatus.COMPLETED
