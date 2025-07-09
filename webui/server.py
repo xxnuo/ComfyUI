@@ -5,18 +5,21 @@ import threading
 import uuid
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, Optional, List
+from typing import Any, Dict, Optional
 
 import torch
 import uvicorn
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Query
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import psutil
 from fastapi.responses import FileResponse
 from pathlib import Path
+from dotenv import load_dotenv
 
 from webui.engine import WanVideo
+
+load_dotenv()
 
 # 配置日志
 logging.basicConfig(
@@ -35,6 +38,7 @@ model_instance = None
 model_status = "unloaded"  # unloaded, loading, loaded, error
 model_error = None
 model_lock = threading.Lock()  # 添加模型操作锁
+model_type = os.getenv("MODEL_TYPE", "small")
 
 # 视频存储目录
 VIDEO_STORAGE_DIR = "./output"
@@ -223,10 +227,13 @@ def load_model():  # small_model: bool = False):  # config: ModelConfig = None):
             # 获取系统可用内存
             available_memory = psutil.virtual_memory().available
             # swap_memory = psutil.swap_memory().free
-            total_available_memory = available_memory # + swap_memory
+            total_available_memory = available_memory  # + swap_memory
             available_memory_gb = total_available_memory / (1024**3)
-            total_memory_gb = 64.0 # + swap_memory / (1024**3)
-            required_memory_gb = 51.0
+            total_memory_gb = 64.0  # + swap_memory / (1024**3)
+            if model_type == "small":
+                required_memory_gb = 21.0
+            else:
+                required_memory_gb = 51.0
 
             logger.info(
                 f"Required more memory: {required_memory_gb}GB, Available system memory: {available_memory_gb:.2f}GB/{total_memory_gb:.2f}GB"
@@ -237,21 +244,20 @@ def load_model():  # small_model: bool = False):  # config: ModelConfig = None):
                     f"Text to video required memory: {required_memory_gb}GB, Available system memory: {available_memory_gb:.2f}GB/{total_memory_gb:.2f}GB, please shutdown other applications and try again."
                 )
 
-            # if small_model:
-            #     model_instance = WanVideo(
-            #         lora_name="Wan21_CausVid_bidirect2_T2V_1_3B_lora_rank32.safetensors",
-            #         transformer_name="Wan2_1-T2V-1_3B_fp8_e4m3fn.safetensors",
-            #         t5_model_name="umt5-xxl-enc-fp8_e4m3fn.safetensors",
-            #         vae_name="Wan2_1_VAE_bf16.safetensors",
-            #     )
-            # else:
-            model_instance = WanVideo(
-                # lora_name=config.lora_name,
-                # transformer_name=config.transformer_name,
-                # t5_model_name=config.t5_model_name,
-                # vae_name=config.vae_name,
-                # strength=config.strength,
-            )
+            if model_type == "small":
+                model_instance = WanVideo(
+                    lora_name="Wan21_CausVid_bidirect2_T2V_1_3B_lora_rank32.safetensors",
+                    transformer_name="Wan2_1-T2V-1_3B_fp8_e4m3fn.safetensors",
+                    t5_model_name="umt5-xxl-enc-fp8_e4m3fn.safetensors",
+                    vae_name="Wan2_1_VAE_bf16.safetensors",
+                )
+            else:
+                model_instance = WanVideo(
+                    lora_name="Wan21_CausVid_14B_T2V_lora_rank32.safetensors",
+                    transformer_name="Wan2_1-T2V-14B_fp8_e5m2.safetensors",
+                    t5_model_name="umt5-xxl-enc-bf16.safetensors",
+                    vae_name="Wan2_1_VAE_bf16.safetensors",
+                )
 
             model_status = "loaded"
             logger.info("Model loaded successfully")
@@ -526,6 +532,7 @@ def get_video(filename: str):
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="视频不存在")
     return FileResponse(file_path)
+
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=3000)
