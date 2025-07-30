@@ -180,12 +180,7 @@ def process_task(task_id: str) -> Task:
 @app.get("/health")
 def health_check():
     """健康检查接口"""
-    return {
-        "status": "ok",
-        "model_status": model_status,
-        "error": model_error,
-        "tasks_count": len(tasks),
-    }
+    return {"status": "ok"}
 
 
 @app.get("/model/status")
@@ -193,8 +188,9 @@ def get_model_status():
     """获取模型状态"""
     return {
         "status": model_status,
-        "error": model_error,
+        "tasks_count": len(tasks),
         "loaded": model_status == "loaded",
+        "error": model_error,
     }
 
 
