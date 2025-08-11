@@ -5,17 +5,17 @@ import threading
 import uuid
 from datetime import datetime
 from enum import Enum
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 import torch
 import uvicorn
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-import psutil
 from fastapi.responses import FileResponse
-from pathlib import Path
-from dotenv import load_dotenv
+from jtop import jtop
+from pydantic import BaseModel
 
 from webui.engine import WanVideo
 
@@ -218,14 +218,18 @@ def load_model():  # small_model: bool = False):  # config: ModelConfig = None):
             if not torch.cuda.is_available():
                 raise ValueError("CUDA is not available, cannot load model")
 
-            # 检查系统内存，要求至少有 51GB 可用
+            # 检查系统内存，要求至少有 21GB 或 51GB 可用
 
             # 获取系统可用内存
-            available_memory = psutil.virtual_memory().available
-            # swap_memory = psutil.swap_memory().free
-            total_available_memory = available_memory  # + swap_memory
-            available_memory_gb = total_available_memory / (1024**3)
-            total_memory_gb = 64.0  # + swap_memory / (1024**3)
+            with jtop() as jetson:
+                if jetson.ok():
+                    tot = jetson.memory.get("RAM").get("tot")
+                    used = jetson.memory.get("RAM").get("used")
+                    available_memory_gb = (tot - used) / (1024**2)  # MB
+                    total_memory_gb = tot / (1024**2)  # MB
+                else:
+                    raise ValueError("Failed to get system memory info")
+
             if model_type == "small":
                 required_memory_gb = 21.0
             else:
