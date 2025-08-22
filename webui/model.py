@@ -1,9 +1,9 @@
-from enum import Enum
+from enum import Enum, StrEnum, IntEnum
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
 
 
-class TaskStatus(str, Enum):
+class TaskStatus(StrEnum):
     # 任务状态: 待处理、处理中、已完成、失败
     PENDING = "pending"
     PROCESSING = "processing"
@@ -19,7 +19,7 @@ class VideoRequest(BaseModel):
     height: Optional[int] = 480
 
 
-class ErrorCode(int, Enum):
+class ErrorCode(IntEnum):
     SUCCESS = 0
     MODEL_NOT_LOADED = 1000
     MODEL_ALREADY_LOADED = 1001
@@ -67,14 +67,14 @@ class ErrorDetail(BaseModel):
     message: ErrorMessage
 
 
-class ModelStatus(str, Enum):
+class ModelStatus(StrEnum):
     UNLOADED = "unloaded"
     LOADING = "loading"
     LOADED = "loaded"
     ERROR = "error"
 
 
-class ModelType(str, Enum):
+class ModelType(StrEnum):
     SMALL = "small"
     LARGE = "large"
 
