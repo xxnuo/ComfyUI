@@ -217,62 +217,65 @@ def load_model():  # small_model: bool = False):  # config: ModelConfig = None):
         model_error = None
         logger.info("Starting model loading...")
 
-        # if config is None:
-        #     config = ModelConfig()
+        try:
+            # if config is None:
+            #     config = ModelConfig()
 
-        # 检查GPU可用性
-        if not torch.cuda.is_available():
-            raise HTTPException(
-                status_code=500, detail="CUDA is not available, cannot load model"
+            # 检查GPU可用性
+            # if not torch.cuda.is_available():
+            #     raise Exception("CUDA is not available, cannot load model")
+
+            # 检查系统内存，要求至少有 21GB 或 51GB 可用
+
+            # 获取系统可用内存
+            with jtop() as jetson:
+                if jetson.ok():
+                    tot = jetson.memory.get("RAM").get("tot")
+                    used = jetson.memory.get("RAM").get("used")
+                    available_memory_gb = (tot - used) / (1024**2)  # MB
+                    total_memory_gb = tot / (1024**2)  # MB
+                else:
+                    raise Exception("Failed to get system memory info")
+
+            if model_type == "small":
+                required_memory_gb = 21.0
+            else:
+                required_memory_gb = 51.0
+
+            logger.info(
+                f"Required more memory: {required_memory_gb}GB, Available system memory: {available_memory_gb:.2f}GB/{total_memory_gb:.2f}GB"
             )
 
-        # 检查系统内存，要求至少有 21GB 或 51GB 可用
-
-        # 获取系统可用内存
-        with jtop() as jetson:
-            if jetson.ok():
-                tot = jetson.memory.get("RAM").get("tot")
-                used = jetson.memory.get("RAM").get("used")
-                available_memory_gb = (tot - used) / (1024**2)  # MB
-                total_memory_gb = tot / (1024**2)  # MB
-            else:
-                raise HTTPException(
-                    status_code=500, detail="Failed to get system memory info"
+            if available_memory_gb < required_memory_gb:
+                raise Exception(
+                    f"Text to video required memory: {required_memory_gb}GB, Available system memory: {available_memory_gb:.2f}GB/{total_memory_gb:.2f}GB, please shutdown other applications and try again."
                 )
 
-        if model_type == "small":
-            required_memory_gb = 21.0
-        else:
-            required_memory_gb = 51.0
+            if model_type == "small":
+                model_instance = WanVideo(
+                    lora_name="Wan21_CausVid_bidirect2_T2V_1_3B_lora_rank32.safetensors",
+                    transformer_name="Wan2_1-T2V-1_3B_fp8_e4m3fn.safetensors",
+                    t5_model_name="umt5-xxl-enc-fp8_e4m3fn.safetensors",
+                    vae_name="Wan2_1_VAE_bf16.safetensors",
+                )
+            else:
+                model_instance = WanVideo(
+                    lora_name="Wan21_CausVid_14B_T2V_lora_rank32.safetensors",
+                    transformer_name="Wan2_1-T2V-14B_fp8_e5m2.safetensors",
+                    t5_model_name="umt5-xxl-enc-bf16.safetensors",
+                    vae_name="Wan2_1_VAE_bf16.safetensors",
+                )
 
-        logger.info(
-            f"Required more memory: {required_memory_gb}GB, Available system memory: {available_memory_gb:.2f}GB/{total_memory_gb:.2f}GB"
-        )
+            model_status = "loaded"
+            logger.info("Model loaded successfully")
+            return {"status": "success", "message": "Model loaded successfully"}
 
-        if available_memory_gb < required_memory_gb:
-            raise HTTPException(
-                status_code=500,
-                detail=f"Text to video required memory: {required_memory_gb}GB, Available system memory: {available_memory_gb:.2f}GB/{total_memory_gb:.2f}GB, please shutdown other applications and try again.",
-            )
-
-        if model_type == "small":
-            model_instance = WanVideo(
-                lora_name="Wan21_CausVid_bidirect2_T2V_1_3B_lora_rank32.safetensors",
-                transformer_name="Wan2_1-T2V-1_3B_fp8_e4m3fn.safetensors",
-                t5_model_name="umt5-xxl-enc-fp8_e4m3fn.safetensors",
-                vae_name="Wan2_1_VAE_bf16.safetensors",
-            )
-        else:
-            model_instance = WanVideo(
-                lora_name="Wan21_CausVid_14B_T2V_lora_rank32.safetensors",
-                transformer_name="Wan2_1-T2V-14B_fp8_e5m2.safetensors",
-                t5_model_name="umt5-xxl-enc-bf16.safetensors",
-                vae_name="Wan2_1_VAE_bf16.safetensors",
-            )
-
-        model_status = "loaded"
-        logger.info("Model loaded successfully")
-        return {"status": "success", "message": "Model loaded successfully"}
+        except Exception as e:
+            model_status = "error"
+            model_error = str(e)
+            model_instance = None
+            logger.error(f"Failed to load model: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/model/unload")
