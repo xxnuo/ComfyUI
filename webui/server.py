@@ -103,7 +103,7 @@ def process_task(task_id: str) -> TaskInfo:
         with model.lock:
             if model.instance is None or model.status != ModelStatus.LOADED:
                 raise HTTPException(
-                    status_code=500,
+                    status_code=503,  # Service Unavailable - 模型未加载
                     detail=ErrorDetail(
                         code=ErrorCode.MODEL_NOT_LOADED,
                         message=ErrorMessage.MODEL_NOT_LOADED,
@@ -130,7 +130,7 @@ def process_task(task_id: str) -> TaskInfo:
             except Exception:
                 logger.error(f"{ErrorMessage.INFER_FAILED % task_id}")
                 raise HTTPException(
-                    status_code=500,
+                    status_code=422,  # Unprocessable Entity - 推理失败
                     detail=ErrorDetail(
                         code=ErrorCode.INFER_FAILED,
                         message=ErrorMessage.INFER_FAILED % task_id,
@@ -228,7 +228,7 @@ def load_model() -> (
                 total_memory_gb = tot / (1024**2)  # MB
             else:
                 raise HTTPException(
-                    status_code=500,
+                    status_code=503,  # Service Unavailable - jtop错误
                     detail=ErrorDetail(
                         code=ErrorCode.MODEL_JTOP_ERROR,
                         message=ErrorMessage.MODEL_JTOP_ERROR,
@@ -246,7 +246,7 @@ def load_model() -> (
 
         if available_memory_gb < required_memory_gb:
             raise HTTPException(
-                status_code=500,
+                status_code=507,  # Insufficient Storage - 内存不足
                 detail=ErrorDetail(
                     code=ErrorCode.MODEL_MEMORY_NOT_ENOUGH,
                     message=ErrorMessage.MODEL_MEMORY_NOT_ENOUGH
@@ -310,7 +310,7 @@ def unload_model() -> UnloadModelResponse:
             )
             logger.error(f"Failed to unload model: {e}")
             raise HTTPException(
-                status_code=500,
+                status_code=503,  # Service Unavailable - 模型卸载错误
                 detail=ErrorDetail(
                     code=ErrorCode.MODEL_ERROR,
                     message=ErrorMessage.MODEL_ERROR,
@@ -355,7 +355,7 @@ def create_task(request: VideoRequest):
     task = process_task(task_id)
     if not task:
         raise HTTPException(
-            status_code=500,
+            status_code=422,  # Unprocessable Entity - 任务处理失败
             detail=ErrorDetail(
                 code=ErrorCode.TASK_FAILED,
                 message=ErrorMessage.TASK_FAILED % task_id,
@@ -544,7 +544,7 @@ def delete_task_video(task_id: str) -> DeleteTaskResponse:
     except Exception as e:
         logger.error(f"Error deleting video for task {task_id}: {e}")
         raise HTTPException(
-            status_code=500,
+            status_code=503,  # Service Unavailable - 删除失败
             detail=ErrorDetail(
                 code=ErrorCode.TASK_DELETE_FAILED,
                 message=ErrorMessage.TASK_DELETE_FAILED % task_id,
