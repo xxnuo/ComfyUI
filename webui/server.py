@@ -1,12 +1,10 @@
-import base64
 import logging
 import os
 import threading
 import uuid
 from datetime import datetime
-from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Dict, List, Optional
 
 import torch
 import uvicorn
@@ -14,10 +12,25 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from jtop import jtop
-from pydantic import BaseModel
+from jtop import jtop  # type: ignore
 
 from webui.engine import WanVideo
+from webui.model import (
+    DeleteTaskResponse,
+    ErrorCode,
+    ErrorDetail,
+    ErrorMessage,
+    LoadModelResponse,
+    ModelStatus,
+    ModelStatusResponse,
+    ModelType,
+    TaskInfo,
+    TaskStatus,
+    UnloadModelResponse,
+    VideoRequest,
+)
+
+# from webui.utils import encode_data
 
 load_dotenv()
 
@@ -33,12 +46,17 @@ logger = logging.getLogger()
 os.environ["CUDA_MODULE_LOADING"] = "LAZY"  # 延迟加载 CUDA 模块
 os.environ["SAFETENSORS_FAST_GPU"] = "1"  # 直接加载 Safetensors 到 GPU
 
+
 # 模型管理
-model_instance = None
-model_status = "unloaded"  # unloaded, loading, loaded, error
-model_error = None
-model_lock = threading.Lock()  # 添加模型操作锁
-model_type = os.getenv("MODEL_TYPE", "small")
+class ModelManager:
+    instance = None
+    status = ModelStatus.UNLOADED
+    error: Optional[ErrorDetail] = None
+    lock = threading.Lock()  # 添加模型操作锁
+    type = os.getenv("MODEL_TYPE", ModelType.SMALL)
+
+
+model = ModelManager()
 
 # 视频存储目录
 VIDEO_STORAGE_DIR = "./output"
@@ -59,80 +77,37 @@ app.add_middleware(
 )
 
 
-# 任务结果存储
-class TaskStatus(str, Enum):
-    PENDING = "pending"
-    PROCESSING = "processing"
-    COMPLETED = "completed"
-    FAILED = "failed"
+tasks: Dict[str, TaskInfo] = {}
 
 
-class VideoRequest(BaseModel):
-    prompt: str
-    seconds: Optional[float] = 4.0  # 默认4秒视频
-    width: Optional[int] = 832
-    height: Optional[int] = 480
-
-
-# class ModelConfig(BaseModel):
-#     lora_name: Optional[str]
-#     transformer_name: Optional[str]
-#     t5_model_name: Optional[str]
-#     vae_name: Optional[str]
-#     strength: Optional[float]
-
-
-class Task(BaseModel):
-    id: str
-    status: TaskStatus
-    prompt: str
-    seconds: float
-    width: int
-    height: int
-    created_at: str
-    completed_at: Optional[str] = None
-    result: Optional[Dict[str, Any]] = None
-    error: Optional[str] = None
-
-
-tasks: Dict[str, Task] = {}
-
-
-def encode_data(data_path):
-    """编码视频文件为base64"""
-    try:
-        with open(data_path, "rb") as f:
-            data = f.read()
-        return base64.b64encode(data).decode("utf-8")
-    except Exception as e:
-        logger.error(f"Error encoding video data: {e}")
-        return None
-
-
-def process_task(task_id: str) -> Task:
+def process_task(task_id: str) -> TaskInfo:
     """同步处理视频生成任务"""
-    global model_instance
+    global model
 
     task = tasks.get(task_id)
     if not task:
         logger.error(f"Task {task_id} not found")
-        return None
+        raise HTTPException(
+            status_code=404,
+            detail=ErrorDetail(
+                code=ErrorCode.TASK_NOT_FOUND,
+                message=ErrorMessage.TASK_NOT_FOUND % task_id,
+            ),
+        )
 
     try:
         task.status = TaskStatus.PROCESSING
         tasks[task_id] = task
         logger.info(f"Processing task {task_id}...")
 
-        with model_lock:
-            if model_instance is None:
+        with model.lock:
+            if model.instance is None or model.status != ModelStatus.LOADED:
                 raise HTTPException(
                     status_code=500,
-                    detail="Model is not loaded. Please load the model first.",
-                )
-            if model_status != "loaded":
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"Model is not in loaded state. Current state: {model_status}",
+                    detail=ErrorDetail(
+                        code=ErrorCode.MODEL_NOT_LOADED,
+                        message=ErrorMessage.MODEL_NOT_LOADED,
+                    ),
                 )
 
             # 计算帧数 (duration * fps + 1)
@@ -144,7 +119,7 @@ def process_task(task_id: str) -> Task:
 
             # 调用推理函数生成视频
             try:
-                save_path = model_instance.inference(
+                save_path = model.instance.inference(
                     prompt=task.prompt,
                     num_frames=num_frames,
                     width=task.width,
@@ -153,10 +128,13 @@ def process_task(task_id: str) -> Task:
                 )
                 logger.info(f"Video generated successfully: {save_path}")
             except Exception as inference_error:
-                logger.error(f"Inference failed: {inference_error}")
+                logger.error(f"{ErrorMessage.INFER_FAILED}: {inference_error}")
                 raise HTTPException(
                     status_code=500,
-                    detail=f"Inference failed: {inference_error}",
+                    detail=ErrorDetail(
+                        code=ErrorCode.INFER_FAILED,
+                        message=ErrorMessage.INFER_FAILED % inference_error,
+                    ),
                 )
 
         # 编码视频数据
@@ -190,132 +168,166 @@ def health_check():
     return {"status": "ok"}
 
 
-@app.get("/model/status")
-def get_model_status():
+@app.get("/model/status", response_model=ModelStatusResponse)
+def get_model_status() -> ModelStatusResponse:
     """获取模型状态"""
-    return {
-        "status": model_status,
-        "tasks_count": len(tasks),
-        "loaded": model_status == "loaded",
-        "error": model_error,
-    }
+    global model, tasks
+    return ModelStatusResponse(
+        status=model.status,
+        tasks_count=len(tasks),
+        loaded=model.status == ModelStatus.LOADED,
+        error=model.error,
+    )
 
 
-@app.post("/model/load")
-def load_model():  # small_model: bool = False):  # config: ModelConfig = None):
+@app.post("/model/load", response_model=LoadModelResponse)
+def load_model() -> (
+    LoadModelResponse
+):  # small_model: bool = False):  # config: ModelConfig = None):
     """加载模型"""
-    global model_instance, model_status, model_error
+    global model
 
-    with model_lock:
-        if model_status == "loading":
-            raise HTTPException(status_code=409, detail="Model is already being loaded")
-
-        if model_status == "loaded":
-            return {"status": "success", "message": "Model is already loaded"}
-
-        model_status = "loading"
-        model_error = None
-        logger.info("Starting model loading...")
-
-        try:
-            # if config is None:
-            #     config = ModelConfig()
-
-            # 检查GPU可用性
-            # if not torch.cuda.is_available():
-            #     raise Exception("CUDA is not available, cannot load model")
-
-            # 检查系统内存，要求至少有 21GB 或 51GB 可用
-
-            # 获取系统可用内存
-            with jtop() as jetson:
-                if jetson.ok():
-                    tot = jetson.memory.get("RAM").get("tot")
-                    used = jetson.memory.get("RAM").get("used")
-                    available_memory_gb = (tot - used) / (1024**2)  # MB
-                    total_memory_gb = tot / (1024**2)  # MB
-                else:
-                    raise Exception("Failed to get system memory info")
-
-            if model_type == "small":
-                required_memory_gb = 21.0
-            else:
-                required_memory_gb = 51.0
-
-            logger.info(
-                f"Required more memory: {required_memory_gb}GB, Available system memory: {available_memory_gb:.2f}GB/{total_memory_gb:.2f}GB"
+    with model.lock:
+        if model.status == ModelStatus.LOADING:
+            raise HTTPException(
+                status_code=409,
+                detail=ErrorDetail(
+                    code=ErrorCode.MODEL_LOADING,
+                    message=ErrorMessage.MODEL_LOADING,
+                ),
             )
 
-            if available_memory_gb < required_memory_gb:
-                raise Exception(
-                    f"Text to video required memory: {required_memory_gb}GB, Available system memory: {available_memory_gb:.2f}GB/{total_memory_gb:.2f}GB, please shutdown other applications and try again."
-                )
+        if model.status == ModelStatus.LOADED:
+            return LoadModelResponse(
+                status=model.status,
+                message=ErrorMessage.MODEL_ALREADY_LOADED,
+            )
 
-            if model_type == "small":
-                model_instance = WanVideo(
-                    lora_name="Wan21_CausVid_bidirect2_T2V_1_3B_lora_rank32.safetensors",
-                    transformer_name="Wan2_1-T2V-1_3B_fp8_e4m3fn.safetensors",
-                    t5_model_name="umt5-xxl-enc-fp8_e4m3fn.safetensors",
-                    vae_name="Wan2_1_VAE_bf16.safetensors",
-                )
+        model.status = ModelStatus.LOADING
+        model.error = None
+        logger.info("Starting model loading...")
+
+        # if config is None:
+        #     config = ModelConfig()
+
+        # 检查GPU可用性
+        # if not torch.cuda.is_available():
+        #     raise Exception("CUDA is not available, cannot load model")
+
+        # 检查系统内存，要求至少有 21GB 或 51GB 可用
+
+        # 获取系统可用内存
+        with jtop() as jetson:
+            if jetson.ok():
+                tot = jetson.memory.get("RAM").get("tot")
+                used = jetson.memory.get("RAM").get("used")
+                available_memory_gb = (tot - used) / (1024**2)  # MB
+                total_memory_gb = tot / (1024**2)  # MB
             else:
-                model_instance = WanVideo(
-                    lora_name="Wan21_CausVid_14B_T2V_lora_rank32.safetensors",
-                    transformer_name="Wan2_1-T2V-14B_fp8_e5m2.safetensors",
-                    t5_model_name="umt5-xxl-enc-bf16.safetensors",
-                    vae_name="Wan2_1_VAE_bf16.safetensors",
+                raise HTTPException(
+                    status_code=500,
+                    detail=ErrorDetail(
+                        code=ErrorCode.MODEL_JTOP_ERROR,
+                        message=ErrorMessage.MODEL_JTOP_ERROR,
+                    ),
                 )
 
-            model_status = "loaded"
-            logger.info("Model loaded successfully")
-            return {"status": "success", "message": "Model loaded successfully"}
+        if model.type == ModelType.SMALL:
+            required_memory_gb = 21.0  # TODO: Const
+        else:
+            required_memory_gb = 51.0  # TODO: Const
 
-        except Exception as e:
-            model_status = "error"
-            model_error = str(e)
-            model_instance = None
-            logger.error(f"Failed to load model: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
+        logger.info(
+            f"Required more memory: {required_memory_gb}GB, Available system memory: {available_memory_gb:.2f}GB/{total_memory_gb:.2f}GB"
+        )
+
+        if available_memory_gb < required_memory_gb:
+            raise HTTPException(
+                status_code=500,
+                detail=ErrorDetail(
+                    code=ErrorCode.MODEL_MEMORY_NOT_ENOUGH,
+                    message=ErrorMessage.MODEL_MEMORY_NOT_ENOUGH
+                    % (required_memory_gb, available_memory_gb, total_memory_gb),
+                ),
+            )
+
+        if model.type == ModelType.SMALL:
+            model.instance = WanVideo(
+                lora_name="Wan21_CausVid_bidirect2_T2V_1_3B_lora_rank32.safetensors",
+                transformer_name="Wan2_1-T2V-1_3B_fp8_e4m3fn.safetensors",
+                t5_model_name="umt5-xxl-enc-fp8_e4m3fn.safetensors",
+                vae_name="Wan2_1_VAE_bf16.safetensors",
+            )
+        else:
+            model.instance = WanVideo(
+                lora_name="Wan21_CausVid_14B_T2V_lora_rank32.safetensors",
+                transformer_name="Wan2_1-T2V-14B_fp8_e5m2.safetensors",
+                t5_model_name="umt5-xxl-enc-bf16.safetensors",
+                vae_name="Wan2_1_VAE_bf16.safetensors",
+            )
+
+        model.status = ModelStatus.LOADED
+        logger.info("Model loaded successfully")
+        return LoadModelResponse(
+            status=model.status,
+            message=ErrorMessage.OK,
+        )
 
 
-@app.post("/model/unload")
-def unload_model():
+@app.post("/model/unload", response_model=UnloadModelResponse)
+def unload_model() -> UnloadModelResponse:
     """卸载模型"""
-    global model_instance, model_status, model_error
+    global model
 
-    with model_lock:
-        if model_status == "unloaded":
-            return {"status": "success", "message": "Model is already unloaded"}
+    with model.lock:
+        if model.status == ModelStatus.UNLOADED:
+            return UnloadModelResponse(
+                status=model.status,
+                message=ErrorMessage.OK,
+            )
 
         try:
             logger.info("Unloading model...")
-            if model_instance:
+            if model.instance:
                 # 释放模型占用的资源
-                model_instance = None
+                model.instance = None
                 torch.cuda.empty_cache()
 
-            model_status = "unloaded"
-            model_error = None
+            model.status = ModelStatus.UNLOADED
+            model.error = None
             logger.info("Model unloaded successfully")
-            return {"status": "success", "message": "Model unloaded successfully"}
+            return UnloadModelResponse(
+                status=model.status,
+                message=ErrorMessage.OK,
+            )
         except Exception as e:
-            model_error = str(e)
+            model.error = ErrorDetail(
+                code=ErrorCode.MODEL_ERROR,
+                message=ErrorMessage.MODEL_ERROR,
+            )
             logger.error(f"Failed to unload model: {e}")
             raise HTTPException(
-                status_code=500, detail=f"Failed to unload model: {str(e)}"
+                status_code=500,
+                detail=ErrorDetail(
+                    code=ErrorCode.MODEL_ERROR,
+                    message=ErrorMessage.MODEL_ERROR,
+                ),
             )
 
 
 @app.post("/tasks")
 def create_task(request: VideoRequest):
     """创建并执行文生视频任务（同步）"""
-    global tasks
+    global model, tasks
 
     # 检查模型状态
-    if model_status != "loaded":
+    if model.status != ModelStatus.LOADED:
         raise HTTPException(
             status_code=400,
-            detail=f"Model is not ready. Current status: {model_status}",
+            detail=ErrorDetail(
+                code=ErrorCode.MODEL_NOT_LOADED,
+                message=ErrorMessage.MODEL_NOT_LOADED,
+            ),
         )
 
     # 生成任务ID
@@ -323,7 +335,7 @@ def create_task(request: VideoRequest):
     logger.info(f"Creating new task {task_id}...")
 
     # 创建简化的任务
-    task = Task(
+    task = TaskInfo(
         id=task_id,
         status=TaskStatus.PENDING,
         prompt=request.prompt,
@@ -339,7 +351,13 @@ def create_task(request: VideoRequest):
     # 同步处理任务
     task = process_task(task_id)
     if not task:
-        raise HTTPException(status_code=500, detail="Failed to process task")
+        raise HTTPException(
+            status_code=500,
+            detail=ErrorDetail(
+                code=ErrorCode.TASK_FAILED,
+                message=ErrorMessage.TASK_FAILED % task_id,
+            ),
+        )
 
     # 如果任务已完成，只返回必要信息，不返回大型base64数据
     response_task = task.model_dump()
@@ -354,82 +372,106 @@ def create_task(request: VideoRequest):
     return response_task
 
 
-@app.get("/tasks/{task_id}")
-def get_task(task_id: str):
+@app.get("/tasks/{task_id}", response_model=TaskInfo)
+def get_task(task_id: str) -> TaskInfo:
     """获取任务状态和结果"""
+    global tasks
     if task_id not in tasks:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise HTTPException(
+            status_code=404,
+            detail=ErrorDetail(
+                code=ErrorCode.TASK_NOT_FOUND,
+                message=ErrorMessage.TASK_NOT_FOUND % task_id,
+            ),
+        )
 
     task = tasks[task_id]
 
     # 如果任务已完成，只返回必要信息，不返回大型base64数据
     if task.status == TaskStatus.COMPLETED and task.result:
         response_task = task.model_dump()
-        if "data" in response_task["result"]:
+        if "data" in response_task.get("result", {}):
             response_task["result"]["data_available"] = True
             del response_task["result"]["data"]
-        return response_task
 
-    return task
+        return TaskInfo(**response_task)
+
+    return TaskInfo(**task.model_dump())
 
 
 @app.get("/tasks/{task_id}/result")
 def get_task_result(task_id: str):
     """专门获取任务结果数据"""
+    global tasks
     if task_id not in tasks:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise HTTPException(
+            status_code=404,
+            detail=ErrorDetail(
+                code=ErrorCode.TASK_NOT_FOUND,
+                message=ErrorMessage.TASK_NOT_FOUND % task_id,
+            ),
+        )
 
     task = tasks[task_id]
 
     if task.status != TaskStatus.COMPLETED:
         raise HTTPException(
             status_code=404,
-            detail=f"Task result not available, current status: {task.status}",
+            detail=ErrorDetail(
+                code=ErrorCode.TASK_NOT_COMPLETED,
+                message=ErrorMessage.TASK_NOT_COMPLETED % task_id,
+            ),
         )
 
     if not task.result:
-        raise HTTPException(status_code=404, detail="Task result is empty")
+        raise HTTPException(
+            status_code=404,
+            detail=ErrorDetail(
+                code=ErrorCode.TASK_RESULT_NOT_AVAILABLE,
+                message=ErrorMessage.TASK_RESULT_NOT_AVAILABLE % task_id,
+            ),
+        )
 
     return task.result
 
 
-@app.get("/tasks")
+@app.get("/tasks", response_model=List[TaskInfo])
 def list_tasks(
     status: Optional[str] = None,
-):
+) -> List[TaskInfo]:
+    global tasks
     if status:
         try:
             task_status = TaskStatus(status)
             filtered_tasks = [t for t in tasks.values() if t.status == task_status]
         except ValueError:
-            raise HTTPException(status_code=400, detail=f"Invalid status: {status}")
+            raise HTTPException(
+                status_code=400,
+                detail=ErrorDetail(
+                    code=ErrorCode.TASK_INVALID_STATUS,
+                    message=ErrorMessage.TASK_INVALID_STATUS % status,
+                ),
+            )
     else:
         filtered_tasks = list(tasks.values())
 
     # 按创建时间倒序排序
     filtered_tasks.sort(key=lambda x: x.created_at, reverse=True)
 
-    return {
-        "total": len(filtered_tasks),
-        "tasks": [
-            {
-                "id": t.id,
-                "status": t.status,
-                "prompt": t.prompt,
-                "created_at": t.created_at,
-                "completed_at": t.completed_at,
-                "error": t.error if t.status == TaskStatus.FAILED else None,
-            }
-            for t in filtered_tasks
-        ],
-    }
+    return [TaskInfo(**t.model_dump()) for t in filtered_tasks]
 
 
-@app.delete("/tasks/{task_id}")
-def delete_task(task_id: str):
+@app.delete("/tasks/{task_id}", response_model=DeleteTaskResponse)
+def delete_task(task_id: str) -> DeleteTaskResponse:
     """删除任务及其视频"""
     if task_id not in tasks:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise HTTPException(
+            status_code=404,
+            detail=ErrorDetail(
+                code=ErrorCode.TASK_NOT_FOUND,
+                message=ErrorMessage.TASK_NOT_FOUND % task_id,
+            ),
+        )
 
     task = tasks[task_id]
 
@@ -447,14 +489,24 @@ def delete_task(task_id: str):
     del tasks[task_id]
     logger.info(f"Deleted task {task_id}")
 
-    return {"status": "success", "message": f"Task {task_id} deleted successfully"}
+    return DeleteTaskResponse(
+        status=TaskStatus.COMPLETED,
+        message=ErrorMessage.OK,
+    )
 
 
-@app.delete("/tasks/{task_id}/video")
-def delete_task_video(task_id: str):
+@app.delete("/tasks/{task_id}/video", response_model=DeleteTaskResponse)
+def delete_task_video(task_id: str) -> DeleteTaskResponse:
     """删除特定任务的视频文件"""
+    global tasks
     if task_id not in tasks:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise HTTPException(
+            status_code=404,
+            detail=ErrorDetail(
+                code=ErrorCode.TASK_NOT_FOUND,
+                message=ErrorMessage.TASK_NOT_FOUND % task_id,
+            ),
+        )
 
     task = tasks[task_id]
 
@@ -463,7 +515,10 @@ def delete_task_video(task_id: str):
         or not task.result
         or "path" not in task.result
     ):
-        return {"status": "skipped", "message": "No video file available for this task"}
+        return DeleteTaskResponse(
+            status=TaskStatus.COMPLETED,
+            message=ErrorMessage.OK,
+        )
 
     video_path = task.result["path"]
 
@@ -474,19 +529,30 @@ def delete_task_video(task_id: str):
             if "data" in task.result:
                 del task.result["data"]
             logger.info(f"Deleted video for task {task_id}")
-            return {
-                "status": "success",
-                "message": f"Video for task {task_id} deleted successfully",
-            }
+            return DeleteTaskResponse(
+                status=TaskStatus.COMPLETED,
+                message=ErrorMessage.OK,
+            )
         else:
-            return {"status": "skipped", "message": "Video file not found"}
+            return DeleteTaskResponse(
+                status=TaskStatus.COMPLETED,
+                message=ErrorMessage.OK,
+            )
     except Exception as e:
         logger.error(f"Error deleting video for task {task_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to delete video: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=ErrorDetail(
+                code=ErrorCode.TASK_DELETE_FAILED,
+                message=ErrorMessage.TASK_DELETE_FAILED % task_id,
+            ),
+        )
 
 
-@app.delete("/tasks/cleanup")
-def cleanup_tasks(keep_uncompleted: bool = True, keep_completed: bool = False):
+@app.delete("/tasks/cleanup", response_model=DeleteTaskResponse)
+def cleanup_tasks(
+    keep_uncompleted: bool = True, keep_completed: bool = False
+) -> DeleteTaskResponse:
     """清理任务列表"""
     global tasks
 
@@ -526,18 +592,23 @@ def cleanup_tasks(keep_uncompleted: bool = True, keep_completed: bool = False):
         f"Cleaned up tasks: removed {removed_count} tasks, kept {len(tasks_to_keep)}"
     )
 
-    return {
-        "status": "success",
-        "removed_count": removed_count,
-        "remaining_count": len(tasks_to_keep),
-    }
+    return DeleteTaskResponse(
+        status=TaskStatus.COMPLETED,
+        message=ErrorMessage.OK,
+    )
 
 
 @app.get("/output/{filename}", description="获取生成的视频")
 def get_video(filename: str):
     file_path = Path(VIDEO_STORAGE_DIR) / filename
     if not file_path.exists():
-        raise HTTPException(status_code=404, detail="视频不存在")
+        raise HTTPException(
+            status_code=404,
+            detail=ErrorDetail(
+                code=ErrorCode.TASK_NOT_FOUND,
+                message=ErrorMessage.TASK_NOT_FOUND % filename,
+            ),
+        )
     return FileResponse(file_path)
 
 
