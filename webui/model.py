@@ -27,7 +27,6 @@ class ErrorCode(int, Enum):
     MODEL_ERROR = 1003
     MODEL_MEMORY_NOT_ENOUGH = 1004
     MODEL_JTOP_ERROR = 1005
-    MODEL_MEMORY_NOT_ENOUGH = 1006
 
     INFER_FAILED = 2000
 
@@ -88,12 +87,12 @@ class ModelStatusResponse(BaseModel):
 
 
 class LoadModelResponse(BaseModel):
-    status: str
+    status: ModelStatus
     message: str
 
 
 class UnloadModelResponse(BaseModel):
-    status: str
+    status: ModelStatus
     message: str
 
 
@@ -112,5 +111,5 @@ class TaskInfo(BaseModel):
 
 
 class DeleteTaskResponse(BaseModel):
-    status: str
+    status: TaskStatus
     message: str

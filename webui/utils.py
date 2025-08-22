@@ -1,6 +1,6 @@
 import base64
 
-from webui.model import ErrorMessage
+from webui.model import ErrorCode, ErrorDetail, ErrorMessage
 
 
 def encode_data(data_path):
@@ -10,4 +10,9 @@ def encode_data(data_path):
             data = f.read()
         return base64.b64encode(data).decode("utf-8")
     except Exception as e:
-        raise Exception(f"{ErrorMessage.ENCODE_VIDEO_FAILED}: {e}")
+        # 抛出一个包含ErrorDetail的异常
+        error_detail = ErrorDetail(
+            code=ErrorCode.ENCODE_VIDEO_FAILED,
+            message=ErrorMessage.ENCODE_VIDEO_FAILED
+        )
+        raise Exception(f"{error_detail.message}: {e}")

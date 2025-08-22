@@ -127,13 +127,13 @@ def process_task(task_id: str) -> TaskInfo:
                     seed=seed,
                 )
                 logger.info(f"Video generated successfully: {save_path}")
-            except Exception as inference_error:
-                logger.error(f"{ErrorMessage.INFER_FAILED}: {inference_error}")
+            except Exception:
+                logger.error(f"{ErrorMessage.INFER_FAILED % task_id}")
                 raise HTTPException(
                     status_code=500,
                     detail=ErrorDetail(
                         code=ErrorCode.INFER_FAILED,
-                        message=ErrorMessage.INFER_FAILED % inference_error,
+                        message=ErrorMessage.INFER_FAILED % task_id,
                     ),
                 )
 
@@ -153,9 +153,12 @@ def process_task(task_id: str) -> TaskInfo:
         logger.info(f"Task {task_id} completed successfully")
 
     except Exception as e:
-        logger.error(f"Task {task_id} failed: {str(e)}")
+        logger.error(f"Task {task_id} failed: {e}")
         task.status = TaskStatus.FAILED
-        task.error = str(e)
+        task.error = ErrorDetail(
+            code=ErrorCode.TASK_FAILED,
+            message=ErrorMessage.TASK_FAILED % task_id,
+        )
         task.completed_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     finally:
         tasks[task_id] = task
