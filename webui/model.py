@@ -1,4 +1,4 @@
-from enum import Enum, StrEnum, IntEnum
+from enum import StrEnum, IntEnum
 from fastapi import HTTPException
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
@@ -42,7 +42,7 @@ class ErrorCode(IntEnum):
     ENCODE_VIDEO_FAILED = 4000
 
 
-class ErrorMessage(str, Enum):
+class ErrorMessage(StrEnum):
     OK = "ok"
     MODEL_NOT_LOADED = "Model is not loaded. Please load the model first"
     MODEL_ALREADY_LOADED = "Model is already loaded"
