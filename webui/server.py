@@ -52,7 +52,7 @@ os.environ["SAFETENSORS_FAST_GPU"] = "1"  # 直接加载 Safetensors 到 GPU
 class ModelManager:
     instance = None
     status = ModelStatus.UNLOADED
-    error: Optional[ErrorDetail] = None
+    # error: Optional[ErrorDetail] = None
     lock = threading.Lock()  # 添加模型操作锁
     type = os.getenv("MODEL_TYPE", ModelType.SMALL)
 
@@ -79,91 +79,79 @@ app.add_middleware(
 
 
 tasks: Dict[str, TaskInfo] = {}
+tasks_lock = threading.Lock()
 
 
-def process_task(task_id: str) -> TaskInfo:
+def process_task(task: TaskInfo) -> TaskInfo:
     """同步处理视频生成任务"""
     global model
 
-    task = tasks.get(task_id)
-    if not task:
-        logger.error(f"Task {task_id} not found")
+    if model.instance is None or model.status != ModelStatus.LOADED:
+        task.status = TaskStatus.FAILED
+        task.error = ErrorDetail(
+            code=ErrorCode.MODEL_NOT_LOADED,
+            message=ErrorMessage.MODEL_NOT_LOADED,
+        )
         raise APIHTTPException(
-            status_code=404,
+            status_code=503,  # Service Unavailable - 模型未加载
             detail=ErrorDetail(
-                code=ErrorCode.TASK_NOT_FOUND,
-                message=ErrorMessage.TASK_NOT_FOUND % task_id,
+                code=ErrorCode.MODEL_NOT_LOADED,
+                message=ErrorMessage.MODEL_NOT_LOADED,
             ),
         )
 
-    try:
+    with model.lock:
         task.status = TaskStatus.PROCESSING
-        tasks[task_id] = task
-        logger.info(f"Processing task {task_id}...")
+        logger.info(f"Processing task {task.id}...")
 
-        with model.lock:
-            if model.instance is None or model.status != ModelStatus.LOADED:
-                raise APIHTTPException(
-                    status_code=503,  # Service Unavailable - 模型未加载
-                    detail=ErrorDetail(
-                        code=ErrorCode.MODEL_NOT_LOADED,
-                        message=ErrorMessage.MODEL_NOT_LOADED,
-                    ),
-                )
+        # 计算帧数 (duration * fps + 1)
+        fps = 16
+        num_frames = int(task.seconds * fps) + 1
 
-            # 计算帧数 (duration * fps + 1)
-            fps = 16
-            num_frames = int(task.seconds * fps) + 1
+        seed = torch.randint(0, 1000000000, (1,)).item()
+        logger.info(f"Generating video with seed: {seed}, frames: {num_frames}")
 
-            seed = torch.randint(0, 1000000000, (1,)).item()
-            logger.info(f"Generating video with seed: {seed}, frames: {num_frames}")
+        # 调用推理函数生成视频
+        try:
+            save_path = model.instance.inference(
+                prompt=task.prompt,
+                num_frames=num_frames,
+                width=task.width,
+                height=task.height,
+                seed=seed,
+            )
+            logger.info(f"Video generated successfully: {save_path}")
+        except Exception:
+            logger.error(f"{ErrorMessage.INFER_FAILED % task.id}")
+            task.status = TaskStatus.FAILED
+            task.error = ErrorDetail(
+                code=ErrorCode.INFER_FAILED,
+                message=ErrorMessage.INFER_FAILED % task.id,
+            )
+            raise APIHTTPException(
+                status_code=422,  # Unprocessable Entity - 推理失败
+                detail=ErrorDetail(
+                    code=ErrorCode.INFER_FAILED,
+                    message=ErrorMessage.INFER_FAILED % task.id,
+                ),
+            )
 
-            # 调用推理函数生成视频
-            try:
-                save_path = model.instance.inference(
-                    prompt=task.prompt,
-                    num_frames=num_frames,
-                    width=task.width,
-                    height=task.height,
-                    seed=seed,
-                )
-                logger.info(f"Video generated successfully: {save_path}")
-            except Exception:
-                logger.error(f"{ErrorMessage.INFER_FAILED % task_id}")
-                raise APIHTTPException(
-                    status_code=422,  # Unprocessable Entity - 推理失败
-                    detail=ErrorDetail(
-                        code=ErrorCode.INFER_FAILED,
-                        message=ErrorMessage.INFER_FAILED % task_id,
-                    ),
-                )
+    # 编码视频数据
+    # video_data = encode_data(save_path)
+    # if not video_data:
+    #     raise ValueError("Failed to encode video data")
 
-        # 编码视频数据
-        # video_data = encode_data(save_path)
-        # if not video_data:
-        #     raise ValueError("Failed to encode video data")
+    task.result = {
+        "filename": os.path.basename(save_path),
+        "path": save_path,
+        # "data": video_data,
+        "seed": seed,
+    }
+    task.status = TaskStatus.COMPLETED
+    task.completed_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    logger.info(f"Task {task.id} completed successfully")
 
-        task.result = {
-            "filename": os.path.basename(save_path),
-            "path": save_path,
-            # "data": video_data,
-            "seed": seed,
-        }
-        task.status = TaskStatus.COMPLETED
-        task.completed_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        logger.info(f"Task {task_id} completed successfully")
-
-    except Exception as e:
-        logger.error(f"Task {task_id} failed: {e}")
-        task.status = TaskStatus.FAILED
-        task.error = ErrorDetail(
-            code=ErrorCode.TASK_FAILED,
-            message=ErrorMessage.TASK_FAILED % task_id,
-        )
-        task.completed_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    finally:
-        tasks[task_id] = task
-        return task
+    return task
 
 
 @app.get("/health")
@@ -180,7 +168,7 @@ def get_model_status() -> ModelStatusResponse:
         status=model.status,
         tasks_count=len(tasks),
         loaded=model.status == ModelStatus.LOADED,
-        error=model.error,
+        # error=model.error,
     )
 
 
@@ -191,70 +179,72 @@ def load_model() -> (
     """加载模型"""
     global model
 
-    with model.lock:
-        if model.status == ModelStatus.LOADING:
-            raise APIHTTPException(
-                status_code=409,
-                detail=ErrorDetail(
-                    code=ErrorCode.MODEL_LOADING,
-                    message=ErrorMessage.MODEL_LOADING,
-                ),
-            )
-
-        if model.status == ModelStatus.LOADED:
-            return LoadModelResponse(
-                status=model.status,
-                message=ErrorMessage.MODEL_ALREADY_LOADED,
-            )
-
-        model.status = ModelStatus.LOADING
-        model.error = None
-        logger.info("Starting model loading...")
-
-        # if config is None:
-        #     config = ModelConfig()
-
-        # 检查GPU可用性
-        # if not torch.cuda.is_available():
-        #     raise Exception("CUDA is not available, cannot load model")
-
-        # 检查系统内存，要求至少有 21GB 或 51GB 可用
-
-        # 获取系统可用内存
-        with jtop() as jetson:
-            if jetson.ok():
-                tot = jetson.memory.get("RAM").get("tot")
-                used = jetson.memory.get("RAM").get("used")
-                available_memory_gb = (tot - used) / (1024**2)  # MB
-                total_memory_gb = tot / (1024**2)  # MB
-            else:
-                raise APIHTTPException(
-                    status_code=503,  # Service Unavailable - jtop错误
-                    detail=ErrorDetail(
-                        code=ErrorCode.MODEL_JTOP_ERROR,
-                        message=ErrorMessage.MODEL_JTOP_ERROR,
-                    ),
-                )
-
-        if model.type == ModelType.SMALL:
-            required_memory_gb = 21.0  # TODO: Const
-        else:
-            required_memory_gb = 51.0  # TODO: Const
-
-        logger.info(
-            f"Required more memory: {required_memory_gb}GB, Available system memory: {available_memory_gb:.2f}GB/{total_memory_gb:.2f}GB"
+    if model.status == ModelStatus.LOADING:
+        raise APIHTTPException(
+            status_code=409,
+            detail=ErrorDetail(
+                code=ErrorCode.MODEL_LOADING,
+                message=ErrorMessage.MODEL_LOADING,
+            ),
         )
 
-        if available_memory_gb < required_memory_gb:
+    if model.status == ModelStatus.LOADED:
+        return LoadModelResponse(
+            status=model.status,
+            message=ErrorMessage.MODEL_ALREADY_LOADED,
+        )
+
+    model.status = ModelStatus.LOADING
+    # model.error = None
+    logger.info("Starting model loading...")
+
+    # if config is None:
+    #     config = ModelConfig()
+
+    # 检查GPU可用性
+    # if not torch.cuda.is_available():
+    #     raise Exception("CUDA is not available, cannot load model")
+
+    # 检查系统内存，要求至少有 21GB 或 51GB 可用
+
+    # 获取系统可用内存
+    with jtop() as jetson:
+        if jetson.ok():
+            tot = jetson.memory.get("RAM").get("tot")
+            used = jetson.memory.get("RAM").get("used")
+            available_memory_gb = (tot - used) / (1024**2)  # MB
+            total_memory_gb = tot / (1024**2)  # MB
+        else:
+            model.status = ModelStatus.ERROR
             raise APIHTTPException(
-                status_code=507,  # Insufficient Storage - 内存不足
+                status_code=503,  # Service Unavailable - jtop错误
                 detail=ErrorDetail(
-                    code=ErrorCode.MODEL_MEMORY_NOT_ENOUGH,
-                    message=ErrorMessage.MODEL_MEMORY_NOT_ENOUGH
-                    % (required_memory_gb, available_memory_gb, total_memory_gb),
+                    code=ErrorCode.MODEL_JTOP_ERROR,
+                    message=ErrorMessage.MODEL_JTOP_ERROR,
                 ),
             )
 
+    if model.type == ModelType.SMALL:
+        required_memory_gb = 21.0  # TODO: Const
+    else:
+        required_memory_gb = 51.0  # TODO: Const
+
+    logger.info(
+        f"Required more memory: {required_memory_gb}GB, Available system memory: {available_memory_gb:.2f}GB/{total_memory_gb:.2f}GB"
+    )
+
+    if available_memory_gb < required_memory_gb:
+        model.status = ModelStatus.ERROR
+        raise APIHTTPException(
+            status_code=507,  # Insufficient Storage - 内存不足
+            detail=ErrorDetail(
+                code=ErrorCode.MODEL_MEMORY_NOT_ENOUGH,
+                message=ErrorMessage.MODEL_MEMORY_NOT_ENOUGH
+                % (required_memory_gb, available_memory_gb, total_memory_gb),
+            ),
+        )
+
+    with model.lock:
         if model.type == ModelType.SMALL:
             model.instance = WanVideo(
                 lora_name="Wan21_CausVid_bidirect2_T2V_1_3B_lora_rank32.safetensors",
@@ -270,12 +260,12 @@ def load_model() -> (
                 vae_name="Wan2_1_VAE_bf16.safetensors",
             )
 
-        model.status = ModelStatus.LOADED
-        logger.info("Model loaded successfully")
-        return LoadModelResponse(
-            status=model.status,
-            message=ErrorMessage.OK,
-        )
+    model.status = ModelStatus.LOADED
+    logger.info("Model loaded successfully")
+    return LoadModelResponse(
+        status=model.status,
+        message=ErrorMessage.OK,
+    )
 
 
 @app.post("/model/unload", response_model=UnloadModelResponse)
@@ -283,40 +273,41 @@ def unload_model() -> UnloadModelResponse:
     """卸载模型"""
     global model
 
-    with model.lock:
-        if model.status == ModelStatus.UNLOADED:
-            return UnloadModelResponse(
-                status=model.status,
-                message=ErrorMessage.OK,
-            )
+    if model.status == ModelStatus.UNLOADED:
+        return UnloadModelResponse(
+            status=model.status,
+            message=ErrorMessage.OK,
+        )
 
-        try:
-            logger.info("Unloading model...")
-            if model.instance:
+    try:
+        logger.info("Unloading model...")
+        if model.instance:
+            with model.lock:
                 # 释放模型占用的资源
                 model.instance = None
                 torch.cuda.empty_cache()
 
-            model.status = ModelStatus.UNLOADED
-            model.error = None
-            logger.info("Model unloaded successfully")
-            return UnloadModelResponse(
-                status=model.status,
-                message=ErrorMessage.OK,
-            )
-        except Exception as e:
-            model.error = ErrorDetail(
+        model.status = ModelStatus.UNLOADED
+        # model.error = None
+        logger.info("Model unloaded successfully")
+        return UnloadModelResponse(
+            status=model.status,
+            message=ErrorMessage.OK,
+        )
+    except Exception as e:
+        model.status = ModelStatus.ERROR
+        model.error = ErrorDetail(
+            code=ErrorCode.MODEL_ERROR,
+            message=ErrorMessage.MODEL_ERROR,
+        )
+        logger.error(f"Failed to unload model: {e}")
+        raise APIHTTPException(
+            status_code=503,  # Service Unavailable - 模型卸载错误
+            detail=ErrorDetail(
                 code=ErrorCode.MODEL_ERROR,
                 message=ErrorMessage.MODEL_ERROR,
-            )
-            logger.error(f"Failed to unload model: {e}")
-            raise APIHTTPException(
-                status_code=503,  # Service Unavailable - 模型卸载错误
-                detail=ErrorDetail(
-                    code=ErrorCode.MODEL_ERROR,
-                    message=ErrorMessage.MODEL_ERROR,
-                ),
-            )
+            ),
+        )
 
 
 @app.post("/tasks")
@@ -350,10 +341,28 @@ def create_task(request: VideoRequest):
     )
 
     # 存储任务
-    tasks[task_id] = task
+    with tasks_lock:
+        tasks[task_id] = task
 
     # 同步处理任务
-    task = process_task(task_id)
+    try:
+        task = process_task(task)
+    except APIHTTPException as e:
+        raise e
+    except Exception as e:
+        task.status = TaskStatus.FAILED
+        task.error = ErrorDetail(
+            code=ErrorCode.TASK_FAILED,
+            message=ErrorMessage.TASK_FAILED % task.id,
+        )
+        raise APIHTTPException(
+            status_code=422,  # Unprocessable Entity - 任务处理失败
+            detail=ErrorDetail(
+                code=ErrorCode.TASK_FAILED,
+                message=ErrorMessage.TASK_FAILED % task.id,
+            ),
+        )
+
     if not task:
         raise APIHTTPException(
             status_code=422,  # Unprocessable Entity - 任务处理失败
@@ -591,7 +600,8 @@ def cleanup_tasks(
             deleted_count += 1
 
     removed_count = len(tasks) - len(tasks_to_keep)
-    tasks = tasks_to_keep
+    with tasks_lock:
+        tasks = tasks_to_keep
     logger.info(
         f"Cleaned up tasks: removed {removed_count} tasks, kept {len(tasks_to_keep)}"
     )
