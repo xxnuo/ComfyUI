@@ -212,8 +212,8 @@ def load_model() -> (
         if jetson.ok():
             tot = jetson.memory.get("RAM").get("tot")
             used = jetson.memory.get("RAM").get("used")
-            available_memory_gb = (tot - used) / (1024**2)  # MB
-            total_memory_gb = tot / (1024**2)  # MB
+            available_memory_gb = round((tot - used) / (1024**2), 1)  # MB
+            total_memory_gb = round(tot / (1024**2), 1)  # MB
         else:
             model.status = ModelStatus.ERROR
             raise APIHTTPException(
@@ -230,7 +230,7 @@ def load_model() -> (
         required_memory_gb = 51.0  # TODO: Const
 
     logger.info(
-        f"Required more memory: {required_memory_gb}GB, Available system memory: {available_memory_gb:.2f}GB/{total_memory_gb:.2f}GB"
+        f"Required more memory: {required_memory_gb}GB, Available system memory: {available_memory_gb}GB/{total_memory_gb}GB"
     )
 
     if available_memory_gb < required_memory_gb:
