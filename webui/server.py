@@ -296,10 +296,10 @@ def unload_model() -> UnloadModelResponse:
         )
     except Exception as e:
         model.status = ModelStatus.ERROR
-        model.error = ErrorDetail(
-            code=ErrorCode.MODEL_ERROR,
-            message=ErrorMessage.MODEL_ERROR,
-        )
+        # model.error = ErrorDetail(
+        #     code=ErrorCode.MODEL_ERROR,
+        #     message=ErrorMessage.MODEL_ERROR,
+        # )
         logger.error(f"Failed to unload model: {e}")
         raise APIHTTPException(
             status_code=503,  # Service Unavailable - 模型卸载错误
