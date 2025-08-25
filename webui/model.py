@@ -65,7 +65,7 @@ class ErrorMessage(StrEnum):
 
 class ErrorDetail(BaseModel):
     code: ErrorCode
-    message: ErrorMessage
+    message: str
 
 
 class APIHTTPException(HTTPException):
