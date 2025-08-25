@@ -1,4 +1,5 @@
 from enum import Enum, StrEnum, IntEnum
+from fastapi import HTTPException
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
 
@@ -65,6 +66,21 @@ class ErrorMessage(str, Enum):
 class ErrorDetail(BaseModel):
     code: ErrorCode
     message: ErrorMessage
+
+
+class APIHTTPException(HTTPException):
+    def __init__(
+        self, status_code: int, detail: ErrorDetail, headers: dict | None = None
+    ):
+        # 将 Pydantic 模型转换为字典
+        if isinstance(detail, BaseModel):
+            serializable_detail = detail.model_dump()
+        else:
+            serializable_detail = detail
+
+        super().__init__(
+            status_code=status_code, detail=serializable_detail, headers=headers
+        )
 
 
 class ModelStatus(StrEnum):

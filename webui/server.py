@@ -9,13 +9,14 @@ from typing import Dict, List, Optional
 import torch
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from jtop import jtop  # type: ignore
 
 from webui.engine import WanVideo
 from webui.model import (
+    APIHTTPException,
     DeleteTaskResponse,
     ErrorCode,
     ErrorDetail,
@@ -87,7 +88,7 @@ def process_task(task_id: str) -> TaskInfo:
     task = tasks.get(task_id)
     if not task:
         logger.error(f"Task {task_id} not found")
-        raise HTTPException(
+        raise APIHTTPException(
             status_code=404,
             detail=ErrorDetail(
                 code=ErrorCode.TASK_NOT_FOUND,
@@ -102,7 +103,7 @@ def process_task(task_id: str) -> TaskInfo:
 
         with model.lock:
             if model.instance is None or model.status != ModelStatus.LOADED:
-                raise HTTPException(
+                raise APIHTTPException(
                     status_code=503,  # Service Unavailable - 模型未加载
                     detail=ErrorDetail(
                         code=ErrorCode.MODEL_NOT_LOADED,
@@ -129,7 +130,7 @@ def process_task(task_id: str) -> TaskInfo:
                 logger.info(f"Video generated successfully: {save_path}")
             except Exception:
                 logger.error(f"{ErrorMessage.INFER_FAILED % task_id}")
-                raise HTTPException(
+                raise APIHTTPException(
                     status_code=422,  # Unprocessable Entity - 推理失败
                     detail=ErrorDetail(
                         code=ErrorCode.INFER_FAILED,
@@ -192,7 +193,7 @@ def load_model() -> (
 
     with model.lock:
         if model.status == ModelStatus.LOADING:
-            raise HTTPException(
+            raise APIHTTPException(
                 status_code=409,
                 detail=ErrorDetail(
                     code=ErrorCode.MODEL_LOADING,
@@ -227,7 +228,7 @@ def load_model() -> (
                 available_memory_gb = (tot - used) / (1024**2)  # MB
                 total_memory_gb = tot / (1024**2)  # MB
             else:
-                raise HTTPException(
+                raise APIHTTPException(
                     status_code=503,  # Service Unavailable - jtop错误
                     detail=ErrorDetail(
                         code=ErrorCode.MODEL_JTOP_ERROR,
@@ -245,7 +246,7 @@ def load_model() -> (
         )
 
         if available_memory_gb < required_memory_gb:
-            raise HTTPException(
+            raise APIHTTPException(
                 status_code=507,  # Insufficient Storage - 内存不足
                 detail=ErrorDetail(
                     code=ErrorCode.MODEL_MEMORY_NOT_ENOUGH,
@@ -309,7 +310,7 @@ def unload_model() -> UnloadModelResponse:
                 message=ErrorMessage.MODEL_ERROR,
             )
             logger.error(f"Failed to unload model: {e}")
-            raise HTTPException(
+            raise APIHTTPException(
                 status_code=503,  # Service Unavailable - 模型卸载错误
                 detail=ErrorDetail(
                     code=ErrorCode.MODEL_ERROR,
@@ -325,7 +326,7 @@ def create_task(request: VideoRequest):
 
     # 检查模型状态
     if model.status != ModelStatus.LOADED:
-        raise HTTPException(
+        raise APIHTTPException(
             status_code=400,
             detail=ErrorDetail(
                 code=ErrorCode.MODEL_NOT_LOADED,
@@ -354,7 +355,7 @@ def create_task(request: VideoRequest):
     # 同步处理任务
     task = process_task(task_id)
     if not task:
-        raise HTTPException(
+        raise APIHTTPException(
             status_code=422,  # Unprocessable Entity - 任务处理失败
             detail=ErrorDetail(
                 code=ErrorCode.TASK_FAILED,
@@ -380,7 +381,7 @@ def get_task(task_id: str) -> TaskInfo:
     """获取任务状态和结果"""
     global tasks
     if task_id not in tasks:
-        raise HTTPException(
+        raise APIHTTPException(
             status_code=404,
             detail=ErrorDetail(
                 code=ErrorCode.TASK_NOT_FOUND,
@@ -407,7 +408,7 @@ def get_task_result(task_id: str):
     """专门获取任务结果数据"""
     global tasks
     if task_id not in tasks:
-        raise HTTPException(
+        raise APIHTTPException(
             status_code=404,
             detail=ErrorDetail(
                 code=ErrorCode.TASK_NOT_FOUND,
@@ -418,7 +419,7 @@ def get_task_result(task_id: str):
     task = tasks[task_id]
 
     if task.status != TaskStatus.COMPLETED:
-        raise HTTPException(
+        raise APIHTTPException(
             status_code=404,
             detail=ErrorDetail(
                 code=ErrorCode.TASK_NOT_COMPLETED,
@@ -427,7 +428,7 @@ def get_task_result(task_id: str):
         )
 
     if not task.result:
-        raise HTTPException(
+        raise APIHTTPException(
             status_code=404,
             detail=ErrorDetail(
                 code=ErrorCode.TASK_RESULT_NOT_AVAILABLE,
@@ -448,7 +449,7 @@ def list_tasks(
             task_status = TaskStatus(status)
             filtered_tasks = [t for t in tasks.values() if t.status == task_status]
         except ValueError:
-            raise HTTPException(
+            raise APIHTTPException(
                 status_code=400,
                 detail=ErrorDetail(
                     code=ErrorCode.TASK_INVALID_STATUS,
@@ -468,7 +469,7 @@ def list_tasks(
 def delete_task(task_id: str) -> DeleteTaskResponse:
     """删除任务及其视频"""
     if task_id not in tasks:
-        raise HTTPException(
+        raise APIHTTPException(
             status_code=404,
             detail=ErrorDetail(
                 code=ErrorCode.TASK_NOT_FOUND,
@@ -503,7 +504,7 @@ def delete_task_video(task_id: str) -> DeleteTaskResponse:
     """删除特定任务的视频文件"""
     global tasks
     if task_id not in tasks:
-        raise HTTPException(
+        raise APIHTTPException(
             status_code=404,
             detail=ErrorDetail(
                 code=ErrorCode.TASK_NOT_FOUND,
@@ -543,7 +544,7 @@ def delete_task_video(task_id: str) -> DeleteTaskResponse:
             )
     except Exception as e:
         logger.error(f"Error deleting video for task {task_id}: {e}")
-        raise HTTPException(
+        raise APIHTTPException(
             status_code=503,  # Service Unavailable - 删除失败
             detail=ErrorDetail(
                 code=ErrorCode.TASK_DELETE_FAILED,
@@ -605,7 +606,7 @@ def cleanup_tasks(
 def get_video(filename: str):
     file_path = Path(VIDEO_STORAGE_DIR) / filename
     if not file_path.exists():
-        raise HTTPException(
+        raise APIHTTPException(
             status_code=404,
             detail=ErrorDetail(
                 code=ErrorCode.TASK_NOT_FOUND,
