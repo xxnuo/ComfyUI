@@ -4,14 +4,14 @@ import threading
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Literal
 
 import torch
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, Header, Query, Cookie, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from jtop import jtop  # type: ignore
 
 from webui.engine import WanVideo
@@ -29,6 +29,7 @@ from webui.model import (
     TaskStatus,
     UnloadModelResponse,
     VideoRequest,
+    get_error_message,
 )
 
 # from webui.utils import encode_data
@@ -82,7 +83,31 @@ tasks: Dict[str, TaskInfo] = {}
 tasks_lock = threading.Lock()
 
 
-def process_task(task: TaskInfo) -> TaskInfo:
+def get_language(
+    accept_language: Optional[str] = None, lang_cookie: Optional[str] = None
+) -> Literal["en", "zh"]:
+    """从Accept-Language头或Cookie中获取语言"""
+    # 优先使用cookie中的语言设置
+    if lang_cookie and lang_cookie.lower() in ["en", "zh"]:
+        return lang_cookie.lower()  # type: ignore
+
+    if not accept_language:
+        return "en"
+
+    # 简单解析Accept-Language头
+    langs = accept_language.split(",")
+    for lang in langs:
+        lang_code = lang.split(";")[0].strip().lower()
+        if lang_code.startswith("zh"):
+            return "zh"
+        if lang_code.startswith("en"):
+            return "en"
+
+    # 默认英语
+    return "en"
+
+
+def process_task(task: TaskInfo, lang: Literal["en", "zh"] = "en") -> TaskInfo:
     """同步处理视频生成任务"""
     global model
 
@@ -90,13 +115,13 @@ def process_task(task: TaskInfo) -> TaskInfo:
         task.status = TaskStatus.FAILED
         task.error = ErrorDetail(
             code=ErrorCode.MODEL_NOT_LOADED,
-            message=ErrorMessage.MODEL_NOT_LOADED,
+            message=get_error_message(ErrorMessage.MODEL_NOT_LOADED, lang),
         )
         raise APIHTTPException(
             status_code=503,  # Service Unavailable - 模型未加载
             detail=ErrorDetail(
                 code=ErrorCode.MODEL_NOT_LOADED,
-                message=ErrorMessage.MODEL_NOT_LOADED,
+                message=get_error_message(ErrorMessage.MODEL_NOT_LOADED, lang),
             ),
         )
 
@@ -122,17 +147,19 @@ def process_task(task: TaskInfo) -> TaskInfo:
             )
             logger.info(f"Video generated successfully: {save_path}")
         except Exception:
-            logger.error(f"{ErrorMessage.INFER_FAILED % task.id}")
+            logger.error(
+                f"{get_error_message(ErrorMessage.INFER_FAILED, lang, task.id)}"
+            )
             task.status = TaskStatus.FAILED
             task.error = ErrorDetail(
                 code=ErrorCode.INFER_FAILED,
-                message=ErrorMessage.INFER_FAILED % task.id,
+                message=get_error_message(ErrorMessage.INFER_FAILED, lang, task.id),
             )
             raise APIHTTPException(
                 status_code=422,  # Unprocessable Entity - 推理失败
                 detail=ErrorDetail(
                     code=ErrorCode.INFER_FAILED,
-                    message=ErrorMessage.INFER_FAILED % task.id,
+                    message=get_error_message(ErrorMessage.INFER_FAILED, lang, task.id),
                 ),
             )
 
@@ -160,6 +187,28 @@ def health_check():
     return {"status": "ok"}
 
 
+@app.post("/language")
+def set_language(lang: Literal["en", "zh"], response: Response):
+    """设置语言偏好"""
+    # 设置cookie，有效期30天
+    response.set_cookie(
+        key="lang", value=lang, max_age=60 * 60 * 24 * 30, httponly=True
+    )
+    return {"status": "ok", "language": lang}
+
+
+@app.get("/language")
+def get_current_language(
+    accept_language: Optional[str] = Header(None), lang: Optional[str] = Cookie(None)
+):
+    """获取当前语言设置"""
+    current_lang = get_language(accept_language, lang)
+    return {
+        "language": current_lang,
+        "source": "cookie" if lang else ("header" if accept_language else "default"),
+    }
+
+
 @app.get("/model/status", response_model=ModelStatusResponse)
 def get_model_status() -> ModelStatusResponse:
     """获取模型状态"""
@@ -173,25 +222,26 @@ def get_model_status() -> ModelStatusResponse:
 
 
 @app.post("/model/load", response_model=LoadModelResponse)
-def load_model() -> (
-    LoadModelResponse
-):  # small_model: bool = False):  # config: ModelConfig = None):
+def load_model(
+    accept_language: Optional[str] = Header(None), lang: Optional[str] = Cookie(None)
+) -> LoadModelResponse:
     """加载模型"""
     global model
+    current_lang = get_language(accept_language, lang)
 
     if model.status == ModelStatus.LOADING:
         raise APIHTTPException(
             status_code=409,
             detail=ErrorDetail(
                 code=ErrorCode.MODEL_LOADING,
-                message=ErrorMessage.MODEL_LOADING,
+                message=get_error_message(ErrorMessage.MODEL_LOADING, current_lang),
             ),
         )
 
     if model.status == ModelStatus.LOADED:
         return LoadModelResponse(
             status=model.status,
-            message=ErrorMessage.MODEL_ALREADY_LOADED,
+            message=get_error_message(ErrorMessage.MODEL_ALREADY_LOADED, current_lang),
         )
 
     model.status = ModelStatus.LOADING
@@ -220,7 +270,9 @@ def load_model() -> (
                 status_code=503,  # Service Unavailable - jtop错误
                 detail=ErrorDetail(
                     code=ErrorCode.MODEL_JTOP_ERROR,
-                    message=ErrorMessage.MODEL_JTOP_ERROR,
+                    message=get_error_message(
+                        ErrorMessage.MODEL_JTOP_ERROR, current_lang
+                    ),
                 ),
             )
 
@@ -239,8 +291,13 @@ def load_model() -> (
             status_code=507,  # Insufficient Storage - 内存不足
             detail=ErrorDetail(
                 code=ErrorCode.MODEL_MEMORY_NOT_ENOUGH,
-                message=ErrorMessage.MODEL_MEMORY_NOT_ENOUGH
-                % (required_memory_gb, available_memory_gb, total_memory_gb),
+                message=get_error_message(
+                    ErrorMessage.MODEL_MEMORY_NOT_ENOUGH,
+                    current_lang,
+                    required_memory_gb,
+                    available_memory_gb,
+                    total_memory_gb,
+                ),
             ),
         )
 
@@ -264,19 +321,22 @@ def load_model() -> (
     logger.info("Model loaded successfully")
     return LoadModelResponse(
         status=model.status,
-        message=ErrorMessage.OK,
+        message=get_error_message(ErrorMessage.OK, current_lang),
     )
 
 
 @app.post("/model/unload", response_model=UnloadModelResponse)
-def unload_model() -> UnloadModelResponse:
+def unload_model(
+    accept_language: Optional[str] = Header(None), lang: Optional[str] = Cookie(None)
+) -> UnloadModelResponse:
     """卸载模型"""
     global model
+    current_lang = get_language(accept_language, lang)
 
     if model.status == ModelStatus.UNLOADED:
         return UnloadModelResponse(
             status=model.status,
-            message=ErrorMessage.OK,
+            message=get_error_message(ErrorMessage.OK, current_lang),
         )
 
     try:
@@ -292,7 +352,7 @@ def unload_model() -> UnloadModelResponse:
         logger.info("Model unloaded successfully")
         return UnloadModelResponse(
             status=model.status,
-            message=ErrorMessage.OK,
+            message=get_error_message(ErrorMessage.OK, current_lang),
         )
     except Exception as e:
         model.status = ModelStatus.ERROR
@@ -305,15 +365,20 @@ def unload_model() -> UnloadModelResponse:
             status_code=503,  # Service Unavailable - 模型卸载错误
             detail=ErrorDetail(
                 code=ErrorCode.MODEL_ERROR,
-                message=ErrorMessage.MODEL_ERROR,
+                message=get_error_message(ErrorMessage.MODEL_ERROR, current_lang),
             ),
         )
 
 
 @app.post("/tasks")
-def create_task(request: VideoRequest):
+def create_task(
+    request: VideoRequest,
+    accept_language: Optional[str] = Header(None),
+    lang: Optional[str] = Cookie(None),
+):
     """创建并执行文生视频任务（同步）"""
     global model, tasks
+    current_lang = get_language(accept_language, lang)
 
     # 检查模型状态
     if model.status != ModelStatus.LOADED:
@@ -321,7 +386,7 @@ def create_task(request: VideoRequest):
             status_code=400,
             detail=ErrorDetail(
                 code=ErrorCode.MODEL_NOT_LOADED,
-                message=ErrorMessage.MODEL_NOT_LOADED,
+                message=get_error_message(ErrorMessage.MODEL_NOT_LOADED, current_lang),
             ),
         )
 
@@ -346,20 +411,22 @@ def create_task(request: VideoRequest):
 
     # 同步处理任务
     try:
-        task = process_task(task)
+        task = process_task(task, current_lang)
     except APIHTTPException as e:
         raise e
     except Exception as e:
         task.status = TaskStatus.FAILED
         task.error = ErrorDetail(
             code=ErrorCode.TASK_FAILED,
-            message=ErrorMessage.TASK_FAILED % task.id,
+            message=get_error_message(ErrorMessage.TASK_FAILED, current_lang, task.id),
         )
         raise APIHTTPException(
             status_code=422,  # Unprocessable Entity - 任务处理失败
             detail=ErrorDetail(
                 code=ErrorCode.TASK_FAILED,
-                message=ErrorMessage.TASK_FAILED % task.id,
+                message=get_error_message(
+                    ErrorMessage.TASK_FAILED, current_lang, task.id
+                ),
             ),
         )
 
@@ -368,7 +435,9 @@ def create_task(request: VideoRequest):
             status_code=422,  # Unprocessable Entity - 任务处理失败
             detail=ErrorDetail(
                 code=ErrorCode.TASK_FAILED,
-                message=ErrorMessage.TASK_FAILED % task_id,
+                message=get_error_message(
+                    ErrorMessage.TASK_FAILED, current_lang, task_id
+                ),
             ),
         )
 
@@ -386,15 +455,23 @@ def create_task(request: VideoRequest):
 
 
 @app.get("/tasks/{task_id}", response_model=TaskInfo)
-def get_task(task_id: str) -> TaskInfo:
+def get_task(
+    task_id: str,
+    accept_language: Optional[str] = Header(None),
+    lang: Optional[str] = Cookie(None),
+) -> TaskInfo:
     """获取任务状态和结果"""
     global tasks
+    current_lang = get_language(accept_language, lang)
+
     if task_id not in tasks:
         raise APIHTTPException(
             status_code=404,
             detail=ErrorDetail(
                 code=ErrorCode.TASK_NOT_FOUND,
-                message=ErrorMessage.TASK_NOT_FOUND % task_id,
+                message=get_error_message(
+                    ErrorMessage.TASK_NOT_FOUND, current_lang, task_id
+                ),
             ),
         )
 
@@ -413,15 +490,23 @@ def get_task(task_id: str) -> TaskInfo:
 
 
 @app.get("/tasks/{task_id}/result")
-def get_task_result(task_id: str):
+def get_task_result(
+    task_id: str,
+    accept_language: Optional[str] = Header(None),
+    lang: Optional[str] = Cookie(None),
+):
     """专门获取任务结果数据"""
     global tasks
+    current_lang = get_language(accept_language, lang)
+
     if task_id not in tasks:
         raise APIHTTPException(
             status_code=404,
             detail=ErrorDetail(
                 code=ErrorCode.TASK_NOT_FOUND,
-                message=ErrorMessage.TASK_NOT_FOUND % task_id,
+                message=get_error_message(
+                    ErrorMessage.TASK_NOT_FOUND, current_lang, task_id
+                ),
             ),
         )
 
@@ -432,7 +517,9 @@ def get_task_result(task_id: str):
             status_code=404,
             detail=ErrorDetail(
                 code=ErrorCode.TASK_NOT_COMPLETED,
-                message=ErrorMessage.TASK_NOT_COMPLETED % task_id,
+                message=get_error_message(
+                    ErrorMessage.TASK_NOT_COMPLETED, current_lang, task_id
+                ),
             ),
         )
 
@@ -441,7 +528,9 @@ def get_task_result(task_id: str):
             status_code=404,
             detail=ErrorDetail(
                 code=ErrorCode.TASK_RESULT_NOT_AVAILABLE,
-                message=ErrorMessage.TASK_RESULT_NOT_AVAILABLE % task_id,
+                message=get_error_message(
+                    ErrorMessage.TASK_RESULT_NOT_AVAILABLE, current_lang, task_id
+                ),
             ),
         )
 
@@ -451,8 +540,12 @@ def get_task_result(task_id: str):
 @app.get("/tasks", response_model=List[TaskInfo])
 def list_tasks(
     status: Optional[str] = None,
+    accept_language: Optional[str] = Header(None),
+    lang: Optional[str] = Cookie(None),
 ) -> List[TaskInfo]:
     global tasks
+    current_lang = get_language(accept_language, lang)
+
     if status:
         try:
             task_status = TaskStatus(status)
@@ -462,7 +555,9 @@ def list_tasks(
                 status_code=400,
                 detail=ErrorDetail(
                     code=ErrorCode.TASK_INVALID_STATUS,
-                    message=ErrorMessage.TASK_INVALID_STATUS % status,
+                    message=get_error_message(
+                        ErrorMessage.TASK_INVALID_STATUS, current_lang, status
+                    ),
                 ),
             )
     else:
@@ -475,14 +570,22 @@ def list_tasks(
 
 
 @app.delete("/tasks/{task_id}", response_model=DeleteTaskResponse)
-def delete_task(task_id: str) -> DeleteTaskResponse:
+def delete_task(
+    task_id: str,
+    accept_language: Optional[str] = Header(None),
+    lang: Optional[str] = Cookie(None),
+) -> DeleteTaskResponse:
     """删除任务及其视频"""
+    current_lang = get_language(accept_language, lang)
+
     if task_id not in tasks:
         raise APIHTTPException(
             status_code=404,
             detail=ErrorDetail(
                 code=ErrorCode.TASK_NOT_FOUND,
-                message=ErrorMessage.TASK_NOT_FOUND % task_id,
+                message=get_error_message(
+                    ErrorMessage.TASK_NOT_FOUND, current_lang, task_id
+                ),
             ),
         )
 
@@ -504,20 +607,28 @@ def delete_task(task_id: str) -> DeleteTaskResponse:
 
     return DeleteTaskResponse(
         status=TaskStatus.COMPLETED,
-        message=ErrorMessage.OK,
+        message=get_error_message(ErrorMessage.OK, current_lang),
     )
 
 
 @app.delete("/tasks/{task_id}/video", response_model=DeleteTaskResponse)
-def delete_task_video(task_id: str) -> DeleteTaskResponse:
+def delete_task_video(
+    task_id: str,
+    accept_language: Optional[str] = Header(None),
+    lang: Optional[str] = Cookie(None),
+) -> DeleteTaskResponse:
     """删除特定任务的视频文件"""
     global tasks
+    current_lang = get_language(accept_language, lang)
+
     if task_id not in tasks:
         raise APIHTTPException(
             status_code=404,
             detail=ErrorDetail(
                 code=ErrorCode.TASK_NOT_FOUND,
-                message=ErrorMessage.TASK_NOT_FOUND % task_id,
+                message=get_error_message(
+                    ErrorMessage.TASK_NOT_FOUND, current_lang, task_id
+                ),
             ),
         )
 
@@ -530,7 +641,7 @@ def delete_task_video(task_id: str) -> DeleteTaskResponse:
     ):
         return DeleteTaskResponse(
             status=TaskStatus.COMPLETED,
-            message=ErrorMessage.OK,
+            message=get_error_message(ErrorMessage.OK, current_lang),
         )
 
     video_path = task.result["path"]
@@ -544,12 +655,12 @@ def delete_task_video(task_id: str) -> DeleteTaskResponse:
             logger.info(f"Deleted video for task {task_id}")
             return DeleteTaskResponse(
                 status=TaskStatus.COMPLETED,
-                message=ErrorMessage.OK,
+                message=get_error_message(ErrorMessage.OK, current_lang),
             )
         else:
             return DeleteTaskResponse(
                 status=TaskStatus.COMPLETED,
-                message=ErrorMessage.OK,
+                message=get_error_message(ErrorMessage.OK, current_lang),
             )
     except Exception as e:
         logger.error(f"Error deleting video for task {task_id}: {e}")
@@ -557,17 +668,23 @@ def delete_task_video(task_id: str) -> DeleteTaskResponse:
             status_code=503,  # Service Unavailable - 删除失败
             detail=ErrorDetail(
                 code=ErrorCode.TASK_DELETE_FAILED,
-                message=ErrorMessage.TASK_DELETE_FAILED % task_id,
+                message=get_error_message(
+                    ErrorMessage.TASK_DELETE_FAILED, current_lang, task_id
+                ),
             ),
         )
 
 
 @app.delete("/tasks/cleanup", response_model=DeleteTaskResponse)
 def cleanup_tasks(
-    keep_uncompleted: bool = True, keep_completed: bool = False
+    keep_uncompleted: bool = True,
+    keep_completed: bool = False,
+    accept_language: Optional[str] = Header(None),
+    lang: Optional[str] = Cookie(None),
 ) -> DeleteTaskResponse:
     """清理任务列表"""
     global tasks
+    current_lang = get_language(accept_language, lang)
 
     # 按创建时间排序所有任务
     all_tasks = list(tasks.values())
@@ -608,19 +725,26 @@ def cleanup_tasks(
 
     return DeleteTaskResponse(
         status=TaskStatus.COMPLETED,
-        message=ErrorMessage.OK,
+        message=get_error_message(ErrorMessage.OK, current_lang),
     )
 
 
 @app.get("/output/{filename}", description="获取生成的视频")
-def get_video(filename: str):
+def get_video(
+    filename: str,
+    accept_language: Optional[str] = Header(None),
+    lang: Optional[str] = Cookie(None),
+):
+    current_lang = get_language(accept_language, lang)
     file_path = Path(VIDEO_STORAGE_DIR) / filename
     if not file_path.exists():
         raise APIHTTPException(
             status_code=404,
             detail=ErrorDetail(
                 code=ErrorCode.TASK_NOT_FOUND,
-                message=ErrorMessage.TASK_NOT_FOUND % filename,
+                message=get_error_message(
+                    ErrorMessage.TASK_NOT_FOUND, current_lang, filename
+                ),
             ),
         )
     return FileResponse(file_path)
