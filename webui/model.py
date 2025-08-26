@@ -4,6 +4,10 @@ from pydantic import BaseModel
 from typing import Optional, Dict, Any, Literal
 
 
+class CommonHeaders(BaseModel):
+    accept_language: Optional[str] = None
+
+
 class TaskStatus(StrEnum):
     # 任务状态: 待处理、处理中、已完成、失败
     PENDING = "pending"
