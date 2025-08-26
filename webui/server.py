@@ -9,9 +9,9 @@ from typing import Dict, List, Optional, Literal
 import torch
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import FastAPI, Header, Query, Cookie, Response
+from fastapi import FastAPI, Header, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse
 from jtop import jtop  # type: ignore
 
 from webui.engine import WanVideo
@@ -83,14 +83,8 @@ tasks: Dict[str, TaskInfo] = {}
 tasks_lock = threading.Lock()
 
 
-def get_language(
-    accept_language: Optional[str] = None, lang_cookie: Optional[str] = None
-) -> Literal["en", "zh"]:
-    """从Accept-Language头或Cookie中获取语言"""
-    # 优先使用cookie中的语言设置
-    if lang_cookie and lang_cookie.lower() in ["en", "zh"]:
-        return lang_cookie.lower()  # type: ignore
-
+def get_language(accept_language: Optional[str] = None) -> Literal["en", "zh"]:
+    """从Accept-Language头中获取语言"""
     if not accept_language:
         return "en"
 
@@ -185,26 +179,13 @@ def health_check():
     return {"status": "ok"}
 
 
-@app.post("/language")
-def set_language(lang: Literal["en", "zh"], response: Response):
-    """设置语言偏好"""
-    # 设置cookie，有效期30天
-    response.set_cookie(
-        key="lang", value=lang, max_age=60 * 60 * 24 * 30, httponly=True
-    )
-    return {"status": "ok", "language": lang}
-
-
 @app.get("/language")
-def get_current_language(
-    accept_language: Optional[str] = Header(default=None), 
-    lang: Optional[str] = Cookie(default=None)
-):
+def get_current_language(accept_language: Optional[str] = Header(default=None)):
     """获取当前语言设置"""
-    current_lang = get_language(accept_language, lang)
+    current_lang = get_language(accept_language)
     return {
         "language": current_lang,
-        "source": "cookie" if lang else ("header" if accept_language else "default"),
+        "source": "header" if accept_language else "default",
     }
 
 
@@ -222,12 +203,11 @@ def get_model_status() -> ModelStatusResponse:
 
 @app.post("/model/load", response_model=LoadModelResponse)
 def load_model(
-    accept_language: Optional[str] = Header(default=None), 
-    lang: Optional[str] = Cookie(default=None)
+    accept_language: Optional[str] = Header(default=None),
 ) -> LoadModelResponse:
     """加载模型"""
     global model
-    current_lang = get_language(accept_language, lang)
+    current_lang = get_language(accept_language)
 
     if model.status == ModelStatus.LOADING:
         raise APIHTTPException(
@@ -325,11 +305,11 @@ def load_model(
 
 @app.post("/model/unload", response_model=UnloadModelResponse)
 def unload_model(
-    accept_language: Optional[str] = Header(default=None), lang: Optional[str] = Cookie(default=None)
+    accept_language: Optional[str] = Header(default=None),
 ) -> UnloadModelResponse:
     """卸载模型"""
     global model
-    current_lang = get_language(accept_language, lang)
+    current_lang = get_language(accept_language)
 
     if model.status == ModelStatus.UNLOADED:
         return UnloadModelResponse(
@@ -372,11 +352,10 @@ def unload_model(
 def create_task(
     request: VideoRequest,
     accept_language: Optional[str] = Header(default=None),
-    lang: Optional[str] = Cookie(default=None),
 ):
     """创建并执行文生视频任务（同步）"""
     global model, tasks
-    current_lang = get_language(accept_language, lang)
+    current_lang = get_language(accept_language)
 
     # 检查模型状态
     if model.status != ModelStatus.LOADED:
@@ -452,11 +431,10 @@ def create_task(
 def get_task(
     task_id: str,
     accept_language: Optional[str] = Header(default=None),
-    lang: Optional[str] = Cookie(default=None),
 ) -> TaskInfo:
     """获取任务状态和结果"""
     global tasks
-    current_lang = get_language(accept_language, lang)
+    current_lang = get_language(accept_language)
 
     if task_id not in tasks:
         raise APIHTTPException(
@@ -485,11 +463,10 @@ def get_task(
 def get_task_result(
     task_id: str,
     accept_language: Optional[str] = Header(default=None),
-    lang: Optional[str] = Cookie(default=None),
 ):
     """专门获取任务结果数据"""
     global tasks
-    current_lang = get_language(accept_language, lang)
+    current_lang = get_language(accept_language)
 
     if task_id not in tasks:
         raise APIHTTPException(
@@ -531,10 +508,9 @@ def get_task_result(
 def list_tasks(
     status: Optional[str] = None,
     accept_language: Optional[str] = Header(default=None),
-    lang: Optional[str] = Cookie(default=None),
 ) -> List[TaskInfo]:
     global tasks
-    current_lang = get_language(accept_language, lang)
+    current_lang = get_language(accept_language)
 
     if status:
         try:
@@ -563,10 +539,9 @@ def list_tasks(
 def delete_task(
     task_id: str,
     accept_language: Optional[str] = Header(default=None),
-    lang: Optional[str] = Cookie(default=None),
 ) -> DeleteTaskResponse:
     """删除任务及其视频"""
-    current_lang = get_language(accept_language, lang)
+    current_lang = get_language(accept_language)
 
     if task_id not in tasks:
         raise APIHTTPException(
@@ -603,11 +578,10 @@ def delete_task(
 def delete_task_video(
     task_id: str,
     accept_language: Optional[str] = Header(default=None),
-    lang: Optional[str] = Cookie(default=None),
 ) -> DeleteTaskResponse:
     """删除特定任务的视频文件"""
     global tasks
-    current_lang = get_language(accept_language, lang)
+    current_lang = get_language(accept_language)
 
     if task_id not in tasks:
         raise APIHTTPException(
@@ -666,11 +640,10 @@ def cleanup_tasks(
     keep_uncompleted: bool = True,
     keep_completed: bool = False,
     accept_language: Optional[str] = Header(default=None),
-    lang: Optional[str] = Cookie(default=None),
 ) -> DeleteTaskResponse:
     """清理任务列表"""
     global tasks
-    current_lang = get_language(accept_language, lang)
+    current_lang = get_language(accept_language)
 
     # 按创建时间排序所有任务
     all_tasks = list(tasks.values())
@@ -719,9 +692,8 @@ def cleanup_tasks(
 def get_video(
     filename: str,
     accept_language: Optional[str] = Header(default=None),
-    lang: Optional[str] = Cookie(default=None),
 ):
-    current_lang = get_language(accept_language, lang)
+    current_lang = get_language(accept_language)
     file_path = Path(VIDEO_STORAGE_DIR) / filename
     if not file_path.exists():
         raise APIHTTPException(
