@@ -29,7 +29,7 @@ from webui.model import (
     TaskStatus,
     UnloadModelResponse,
     VideoRequest,
-    get_error_message,
+    get_err_msg,
 )
 
 # from webui.utils import encode_data
@@ -115,13 +115,13 @@ def process_task(task: TaskInfo, lang: Literal["en", "zh"] = "en") -> TaskInfo:
         task.status = TaskStatus.FAILED
         task.error = ErrorDetail(
             code=ErrorCode.MODEL_NOT_LOADED,
-            message=get_error_message(ErrorMessage.MODEL_NOT_LOADED, lang),
+            message=get_err_msg(ErrorMessage.MODEL_NOT_LOADED, lang),
         )
         raise APIHTTPException(
             status_code=503,  # Service Unavailable - 模型未加载
             detail=ErrorDetail(
                 code=ErrorCode.MODEL_NOT_LOADED,
-                message=get_error_message(ErrorMessage.MODEL_NOT_LOADED, lang),
+                message=get_err_msg(ErrorMessage.MODEL_NOT_LOADED, lang),
             ),
         )
 
@@ -147,19 +147,17 @@ def process_task(task: TaskInfo, lang: Literal["en", "zh"] = "en") -> TaskInfo:
             )
             logger.info(f"Video generated successfully: {save_path}")
         except Exception:
-            logger.error(
-                f"{get_error_message(ErrorMessage.INFER_FAILED, lang, task.id)}"
-            )
+            logger.error(f"{get_err_msg(ErrorMessage.INFER_FAILED, lang, task.id)}")
             task.status = TaskStatus.FAILED
             task.error = ErrorDetail(
                 code=ErrorCode.INFER_FAILED,
-                message=get_error_message(ErrorMessage.INFER_FAILED, lang, task.id),
+                message=get_err_msg(ErrorMessage.INFER_FAILED, lang, task.id),
             )
             raise APIHTTPException(
                 status_code=422,  # Unprocessable Entity - 推理失败
                 detail=ErrorDetail(
                     code=ErrorCode.INFER_FAILED,
-                    message=get_error_message(ErrorMessage.INFER_FAILED, lang, task.id),
+                    message=get_err_msg(ErrorMessage.INFER_FAILED, lang, task.id),
                 ),
             )
 
@@ -234,14 +232,14 @@ def load_model(
             status_code=409,
             detail=ErrorDetail(
                 code=ErrorCode.MODEL_LOADING,
-                message=get_error_message(ErrorMessage.MODEL_LOADING, current_lang),
+                message=get_err_msg(ErrorMessage.MODEL_LOADING, current_lang),
             ),
         )
 
     if model.status == ModelStatus.LOADED:
         return LoadModelResponse(
             status=model.status,
-            message=get_error_message(ErrorMessage.MODEL_ALREADY_LOADED, current_lang),
+            message=get_err_msg(ErrorMessage.MODEL_ALREADY_LOADED, current_lang),
         )
 
     model.status = ModelStatus.LOADING
@@ -270,9 +268,7 @@ def load_model(
                 status_code=503,  # Service Unavailable - jtop错误
                 detail=ErrorDetail(
                     code=ErrorCode.MODEL_JTOP_ERROR,
-                    message=get_error_message(
-                        ErrorMessage.MODEL_JTOP_ERROR, current_lang
-                    ),
+                    message=get_err_msg(ErrorMessage.MODEL_JTOP_ERROR, current_lang),
                 ),
             )
 
@@ -291,7 +287,7 @@ def load_model(
             status_code=507,  # Insufficient Storage - 内存不足
             detail=ErrorDetail(
                 code=ErrorCode.MODEL_MEMORY_NOT_ENOUGH,
-                message=get_error_message(
+                message=get_err_msg(
                     ErrorMessage.MODEL_MEMORY_NOT_ENOUGH,
                     current_lang,
                     required_memory_gb,
@@ -321,7 +317,7 @@ def load_model(
     logger.info("Model loaded successfully")
     return LoadModelResponse(
         status=model.status,
-        message=get_error_message(ErrorMessage.OK, current_lang),
+        message=get_err_msg(ErrorMessage.OK, current_lang),
     )
 
 
@@ -336,7 +332,7 @@ def unload_model(
     if model.status == ModelStatus.UNLOADED:
         return UnloadModelResponse(
             status=model.status,
-            message=get_error_message(ErrorMessage.OK, current_lang),
+            message=get_err_msg(ErrorMessage.OK, current_lang),
         )
 
     try:
@@ -352,7 +348,7 @@ def unload_model(
         logger.info("Model unloaded successfully")
         return UnloadModelResponse(
             status=model.status,
-            message=get_error_message(ErrorMessage.OK, current_lang),
+            message=get_err_msg(ErrorMessage.OK, current_lang),
         )
     except Exception as e:
         model.status = ModelStatus.ERROR
@@ -365,7 +361,7 @@ def unload_model(
             status_code=503,  # Service Unavailable - 模型卸载错误
             detail=ErrorDetail(
                 code=ErrorCode.MODEL_ERROR,
-                message=get_error_message(ErrorMessage.MODEL_ERROR, current_lang),
+                message=get_err_msg(ErrorMessage.MODEL_ERROR, current_lang),
             ),
         )
 
@@ -386,7 +382,7 @@ def create_task(
             status_code=400,
             detail=ErrorDetail(
                 code=ErrorCode.MODEL_NOT_LOADED,
-                message=get_error_message(ErrorMessage.MODEL_NOT_LOADED, current_lang),
+                message=get_err_msg(ErrorMessage.MODEL_NOT_LOADED, current_lang),
             ),
         )
 
@@ -418,15 +414,13 @@ def create_task(
         task.status = TaskStatus.FAILED
         task.error = ErrorDetail(
             code=ErrorCode.TASK_FAILED,
-            message=get_error_message(ErrorMessage.TASK_FAILED, current_lang, task.id),
+            message=get_err_msg(ErrorMessage.TASK_FAILED, current_lang, task.id),
         )
         raise APIHTTPException(
             status_code=422,  # Unprocessable Entity - 任务处理失败
             detail=ErrorDetail(
                 code=ErrorCode.TASK_FAILED,
-                message=get_error_message(
-                    ErrorMessage.TASK_FAILED, current_lang, task.id
-                ),
+                message=get_err_msg(ErrorMessage.TASK_FAILED, current_lang, task.id),
             ),
         )
 
@@ -435,9 +429,7 @@ def create_task(
             status_code=422,  # Unprocessable Entity - 任务处理失败
             detail=ErrorDetail(
                 code=ErrorCode.TASK_FAILED,
-                message=get_error_message(
-                    ErrorMessage.TASK_FAILED, current_lang, task_id
-                ),
+                message=get_err_msg(ErrorMessage.TASK_FAILED, current_lang, task_id),
             ),
         )
 
@@ -469,9 +461,7 @@ def get_task(
             status_code=404,
             detail=ErrorDetail(
                 code=ErrorCode.TASK_NOT_FOUND,
-                message=get_error_message(
-                    ErrorMessage.TASK_NOT_FOUND, current_lang, task_id
-                ),
+                message=get_err_msg(ErrorMessage.TASK_NOT_FOUND, current_lang, task_id),
             ),
         )
 
@@ -504,9 +494,7 @@ def get_task_result(
             status_code=404,
             detail=ErrorDetail(
                 code=ErrorCode.TASK_NOT_FOUND,
-                message=get_error_message(
-                    ErrorMessage.TASK_NOT_FOUND, current_lang, task_id
-                ),
+                message=get_err_msg(ErrorMessage.TASK_NOT_FOUND, current_lang, task_id),
             ),
         )
 
@@ -517,7 +505,7 @@ def get_task_result(
             status_code=404,
             detail=ErrorDetail(
                 code=ErrorCode.TASK_NOT_COMPLETED,
-                message=get_error_message(
+                message=get_err_msg(
                     ErrorMessage.TASK_NOT_COMPLETED, current_lang, task_id
                 ),
             ),
@@ -528,7 +516,7 @@ def get_task_result(
             status_code=404,
             detail=ErrorDetail(
                 code=ErrorCode.TASK_RESULT_NOT_AVAILABLE,
-                message=get_error_message(
+                message=get_err_msg(
                     ErrorMessage.TASK_RESULT_NOT_AVAILABLE, current_lang, task_id
                 ),
             ),
@@ -555,7 +543,7 @@ def list_tasks(
                 status_code=400,
                 detail=ErrorDetail(
                     code=ErrorCode.TASK_INVALID_STATUS,
-                    message=get_error_message(
+                    message=get_err_msg(
                         ErrorMessage.TASK_INVALID_STATUS, current_lang, status
                     ),
                 ),
@@ -583,9 +571,7 @@ def delete_task(
             status_code=404,
             detail=ErrorDetail(
                 code=ErrorCode.TASK_NOT_FOUND,
-                message=get_error_message(
-                    ErrorMessage.TASK_NOT_FOUND, current_lang, task_id
-                ),
+                message=get_err_msg(ErrorMessage.TASK_NOT_FOUND, current_lang, task_id),
             ),
         )
 
@@ -607,7 +593,7 @@ def delete_task(
 
     return DeleteTaskResponse(
         status=TaskStatus.COMPLETED,
-        message=get_error_message(ErrorMessage.OK, current_lang),
+        message=get_err_msg(ErrorMessage.OK, current_lang),
     )
 
 
@@ -626,9 +612,7 @@ def delete_task_video(
             status_code=404,
             detail=ErrorDetail(
                 code=ErrorCode.TASK_NOT_FOUND,
-                message=get_error_message(
-                    ErrorMessage.TASK_NOT_FOUND, current_lang, task_id
-                ),
+                message=get_err_msg(ErrorMessage.TASK_NOT_FOUND, current_lang, task_id),
             ),
         )
 
@@ -641,7 +625,7 @@ def delete_task_video(
     ):
         return DeleteTaskResponse(
             status=TaskStatus.COMPLETED,
-            message=get_error_message(ErrorMessage.OK, current_lang),
+            message=get_err_msg(ErrorMessage.OK, current_lang),
         )
 
     video_path = task.result["path"]
@@ -655,12 +639,12 @@ def delete_task_video(
             logger.info(f"Deleted video for task {task_id}")
             return DeleteTaskResponse(
                 status=TaskStatus.COMPLETED,
-                message=get_error_message(ErrorMessage.OK, current_lang),
+                message=get_err_msg(ErrorMessage.OK, current_lang),
             )
         else:
             return DeleteTaskResponse(
                 status=TaskStatus.COMPLETED,
-                message=get_error_message(ErrorMessage.OK, current_lang),
+                message=get_err_msg(ErrorMessage.OK, current_lang),
             )
     except Exception as e:
         logger.error(f"Error deleting video for task {task_id}: {e}")
@@ -668,7 +652,7 @@ def delete_task_video(
             status_code=503,  # Service Unavailable - 删除失败
             detail=ErrorDetail(
                 code=ErrorCode.TASK_DELETE_FAILED,
-                message=get_error_message(
+                message=get_err_msg(
                     ErrorMessage.TASK_DELETE_FAILED, current_lang, task_id
                 ),
             ),
@@ -725,7 +709,7 @@ def cleanup_tasks(
 
     return DeleteTaskResponse(
         status=TaskStatus.COMPLETED,
-        message=get_error_message(ErrorMessage.OK, current_lang),
+        message=get_err_msg(ErrorMessage.OK, current_lang),
     )
 
 
@@ -742,7 +726,7 @@ def get_video(
             status_code=404,
             detail=ErrorDetail(
                 code=ErrorCode.TASK_NOT_FOUND,
-                message=get_error_message(
+                message=get_err_msg(
                     ErrorMessage.TASK_NOT_FOUND, current_lang, filename
                 ),
             ),

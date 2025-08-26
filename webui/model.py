@@ -102,7 +102,7 @@ class ErrorMessage(StrEnum):
     ENCODE_VIDEO_FAILED = "ENCODE_VIDEO_FAILED"
 
 
-def get_error_message(
+def get_err_msg(
     error_code: ErrorMessage, lang: Literal["en", "zh"] = "en", *args
 ) -> str:
     """Get the error message in the specified language"""
