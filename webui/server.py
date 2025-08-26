@@ -197,7 +197,8 @@ def set_language(lang: Literal["en", "zh"], response: Response):
 
 @app.get("/language")
 def get_current_language(
-    accept_language: Optional[str] = Header(None), lang: Optional[str] = Cookie(None)
+    accept_language: Optional[str] = Header(default=None), 
+    lang: Optional[str] = Cookie(default=None)
 ):
     """获取当前语言设置"""
     current_lang = get_language(accept_language, lang)
@@ -221,7 +222,8 @@ def get_model_status() -> ModelStatusResponse:
 
 @app.post("/model/load", response_model=LoadModelResponse)
 def load_model(
-    accept_language: Optional[str] = Header(None), lang: Optional[str] = Cookie(None)
+    accept_language: Optional[str] = Header(default=None), 
+    lang: Optional[str] = Cookie(default=None)
 ) -> LoadModelResponse:
     """加载模型"""
     global model
@@ -323,7 +325,7 @@ def load_model(
 
 @app.post("/model/unload", response_model=UnloadModelResponse)
 def unload_model(
-    accept_language: Optional[str] = Header(None), lang: Optional[str] = Cookie(None)
+    accept_language: Optional[str] = Header(default=None), lang: Optional[str] = Cookie(default=None)
 ) -> UnloadModelResponse:
     """卸载模型"""
     global model
@@ -369,8 +371,8 @@ def unload_model(
 @app.post("/tasks")
 def create_task(
     request: VideoRequest,
-    accept_language: Optional[str] = Header(None),
-    lang: Optional[str] = Cookie(None),
+    accept_language: Optional[str] = Header(default=None),
+    lang: Optional[str] = Cookie(default=None),
 ):
     """创建并执行文生视频任务（同步）"""
     global model, tasks
@@ -449,8 +451,8 @@ def create_task(
 @app.get("/tasks/{task_id}", response_model=TaskInfo)
 def get_task(
     task_id: str,
-    accept_language: Optional[str] = Header(None),
-    lang: Optional[str] = Cookie(None),
+    accept_language: Optional[str] = Header(default=None),
+    lang: Optional[str] = Cookie(default=None),
 ) -> TaskInfo:
     """获取任务状态和结果"""
     global tasks
@@ -482,8 +484,8 @@ def get_task(
 @app.get("/tasks/{task_id}/result")
 def get_task_result(
     task_id: str,
-    accept_language: Optional[str] = Header(None),
-    lang: Optional[str] = Cookie(None),
+    accept_language: Optional[str] = Header(default=None),
+    lang: Optional[str] = Cookie(default=None),
 ):
     """专门获取任务结果数据"""
     global tasks
@@ -528,8 +530,8 @@ def get_task_result(
 @app.get("/tasks", response_model=List[TaskInfo])
 def list_tasks(
     status: Optional[str] = None,
-    accept_language: Optional[str] = Header(None),
-    lang: Optional[str] = Cookie(None),
+    accept_language: Optional[str] = Header(default=None),
+    lang: Optional[str] = Cookie(default=None),
 ) -> List[TaskInfo]:
     global tasks
     current_lang = get_language(accept_language, lang)
@@ -560,8 +562,8 @@ def list_tasks(
 @app.delete("/tasks/{task_id}", response_model=DeleteTaskResponse)
 def delete_task(
     task_id: str,
-    accept_language: Optional[str] = Header(None),
-    lang: Optional[str] = Cookie(None),
+    accept_language: Optional[str] = Header(default=None),
+    lang: Optional[str] = Cookie(default=None),
 ) -> DeleteTaskResponse:
     """删除任务及其视频"""
     current_lang = get_language(accept_language, lang)
@@ -600,8 +602,8 @@ def delete_task(
 @app.delete("/tasks/{task_id}/video", response_model=DeleteTaskResponse)
 def delete_task_video(
     task_id: str,
-    accept_language: Optional[str] = Header(None),
-    lang: Optional[str] = Cookie(None),
+    accept_language: Optional[str] = Header(default=None),
+    lang: Optional[str] = Cookie(default=None),
 ) -> DeleteTaskResponse:
     """删除特定任务的视频文件"""
     global tasks
@@ -663,8 +665,8 @@ def delete_task_video(
 def cleanup_tasks(
     keep_uncompleted: bool = True,
     keep_completed: bool = False,
-    accept_language: Optional[str] = Header(None),
-    lang: Optional[str] = Cookie(None),
+    accept_language: Optional[str] = Header(default=None),
+    lang: Optional[str] = Cookie(default=None),
 ) -> DeleteTaskResponse:
     """清理任务列表"""
     global tasks
@@ -716,8 +718,8 @@ def cleanup_tasks(
 @app.get("/output/{filename}", description="获取生成的视频")
 def get_video(
     filename: str,
-    accept_language: Optional[str] = Header(None),
-    lang: Optional[str] = Cookie(None),
+    accept_language: Optional[str] = Header(default=None),
+    lang: Optional[str] = Cookie(default=None),
 ):
     current_lang = get_language(accept_language, lang)
     file_path = Path(VIDEO_STORAGE_DIR) / filename
