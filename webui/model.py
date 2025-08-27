@@ -57,7 +57,7 @@ class ErrorMessages:
         "MODEL_LOADING": "Model is already being loaded",
         "MODEL_ERROR": "Model error (perhaps unload failed)",
         "MODEL_JTOP_ERROR": "Failed to get system memory info",
-        "MODEL_MEMORY_NOT_ENOUGH": "Text to video required memory: %sGB, Available system memory: %sGB/%sGB, please shutdown other services and try again.",
+        "MODEL_MEMORY_NOT_ENOUGH": "Model required memory: %sGB, Available system memory: %sGB/%sGB, please shutdown other services and try again.",
         "INFER_FAILED": "Inference failed: %s",
         "TASK_NOT_FOUND": "Task %s not found",
         "TASK_FAILED": "Task %s failed",
@@ -76,7 +76,7 @@ class ErrorMessages:
         "MODEL_LOADING": "模型正在加载中",
         "MODEL_ERROR": "模型错误（可能卸载失败）",
         "MODEL_JTOP_ERROR": "获取系统内存信息失败",
-        "MODEL_MEMORY_NOT_ENOUGH": "文本生成视频需要内存：%sGB，系统可用内存：%sGB/%sGB，请在服务管理关闭其他服务后重试。",
+        "MODEL_MEMORY_NOT_ENOUGH": "模型需要内存：%sGB，系统可用内存：%sGB/%sGB，请在服务管理关闭其他服务后重试。",
         "INFER_FAILED": "推理失败：%s",
         "TASK_NOT_FOUND": "任务 %s 未找到",
         "TASK_FAILED": "任务 %s 失败",
@@ -154,7 +154,6 @@ class ModelStatusResponse(BaseModel):
     status: ModelStatus
     tasks_count: int
     loaded: bool
-    error: Optional[ErrorDetail] = None
 
 
 class LoadModelResponse(BaseModel):
