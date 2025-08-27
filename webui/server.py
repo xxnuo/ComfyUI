@@ -1,6 +1,7 @@
 import logging
 import os
 import threading
+import time
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -9,7 +10,7 @@ from typing import Dict, List, Optional, Literal, Annotated
 import torch
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import FastAPI, Header
+from fastapi import FastAPI, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from jtop import jtop  # type: ignore
@@ -78,6 +79,16 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def add_process_time_header(request: Request, call_next):
+    """添加处理时间头部的中间件"""
+    start_time = time.time()
+    response = await call_next(request)
+    process_time = time.time() - start_time
+    response.headers["x-process-time"] = str(process_time)
+    return response
 
 
 tasks: Dict[str, TaskInfo] = {}
